@@ -1,0 +1,28 @@
+spec_version: 1
+name: sepsisguard
+type: space
+runtime: fastapi
+app: server.app:app
+port: 7860
+description: Multi-agent sepsis coordination environment for OpenEnv.
+domain: healthcare-coordination
+tasks:
+  - name: task1_textbook
+    description: Single textbook sepsis — warm-up
+    difficulty: easy
+    max_steps: 48
+    success_threshold: 0.70
+  - name: task2_atypical
+    description: Multiple atypical presentations, asymmetric info
+    difficulty: medium
+    max_steps: 96
+    success_threshold: 0.55
+  - name: task3_high_acuity
+    description: Mixed sepsis + false alarms, lab delays
+    difficulty: hard
+    max_steps: 144
+    success_threshold: 0.40
+observation_space: PerAgentObservation
+action_space: PerAgentAction
+reward_range: [-3.0, 2.0]
+baseline_model: meta-llama/Llama-3.1-8B-Instruct
