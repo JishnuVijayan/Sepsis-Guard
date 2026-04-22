@@ -4,13 +4,14 @@ SepsisGuard -- LLM Inference Script
 Required env vars:
   API_BASE_URL   e.g. https://router.huggingface.co/v1
   MODEL_NAME     e.g. meta-llama/Llama-3.1-8B-Instruct
-  HF_TOKEN       HuggingFace API token
+    OPENAI_API_KEY  Preferred API token
+    HF_TOKEN       Fallback HuggingFace API token
   ENV_BASE_URL   URL of the SepsisGuard Space (default: http://localhost:7860)
 
 STDOUT lines:
   [START] task=<name> env=sepsisguard model=<name>
-  [STEP] tick=<n> role=<role> action=<json> reward=<r> done=<bool>
-  [END] success=<bool> ticks=<n> team_reward=<r> score=<s>
+    [STEP] step=<n> action=<json> reward=<r> done=<bool> error=<msg|null>
+    [END] success=<bool> steps=<n> score=<s> rewards=<r1,r2,...>
 """
 from __future__ import annotations
 import os, json, sys, re, textwrap
@@ -19,7 +20,7 @@ import requests
 from openai import OpenAI
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://localhost:7860").rstrip("/")
 TASK = os.getenv("SEPSIS_TASK")
@@ -62,6 +63,23 @@ SYSTEM_PROMPTS = {
 
 
 def log(prefix: str, msg: str): print(f"[{prefix}] {msg}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]):
+    err = error if error else "null"
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} "
+        f"done={str(done).lower()} error={err}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]):
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={float(score):.4f} rewards={rewards_str}",
+        flush=True,
+    )
 
 def env_reset(task: str, seed: int) -> Dict[str, Any]:
     r = requests.post(f"{ENV_BASE_URL}/reset", json={"task_name": task, "seed": seed}, timeout=30)
@@ -115,14 +133,16 @@ def run_task(task_name: str, seed: int, client: Optional[OpenAI]):
     log("START", f"task={task_name} env=sepsisguard model={MODEL_NAME}")
     bundle = env_reset(task_name, seed)
     done = False
-    total_team = 0.0
-    ticks = 0
-    last_result = None
+    steps = 0
+    last_result: Dict[str, Any] = {}
+    using_fallback = client is None
+    if using_fallback:
+        log("WARN", "No OPENAI_API_KEY / HF_TOKEN / API_KEY -- using heuristic fallback for all episodes")
     while not done:
         obs = bundle["observations"]
         actions: Dict[str, Dict[str, Any]] = {}
         for role in ("nurse", "lab", "pharmacist", "physician"):
-            if client is None:
+            if using_fallback:
                 actions[role] = heuristic_fallback(role, obs[role])
                 continue
             try:
@@ -139,28 +159,34 @@ def run_task(task_name: str, seed: int, client: Optional[OpenAI]):
                 actions[role] = parse_action(text, role, obs[role])
             except Exception as exc:
                 log("WARN", f"LLM failure for {role}: {exc} -- fallback")
+                using_fallback = True
                 actions[role] = heuristic_fallback(role, obs[role])
+        step_error: Optional[str] = None
         bundle = env_step(actions)
-        ticks = bundle["info"]["tick"]
-        total_team += bundle["team_reward"]
+        steps = int(bundle["info"]["tick"])
         done = bundle["done"]
-        for role in ("nurse", "lab", "pharmacist", "physician"):
-            log("STEP",
-                f"tick={ticks} role={role} "
-                f"action={json.dumps(actions[role], separators=(',',':'))} "
-                f"reward={bundle['rewards'][role]:.3f} done={done}")
+        action_str = json.dumps(actions, separators=(",", ":"))
+        log_step(
+            step=steps,
+            action=action_str,
+            reward=float(bundle.get("team_reward", 0.0)),
+            done=done,
+            error=step_error,
+        )
         last_result = bundle
 
     grader = requests.get(f"{ENV_BASE_URL}/grader").json()
     score = grader.get("score")
     passed = (grader.get("metrics") or {}).get("passed", False)
-    log("END", f"success={passed} ticks={ticks} team_reward={total_team:.3f} score={score}")
+    agent_rewards = (grader.get("agent_rewards") or {})
+    rewards = [float(agent_rewards.get(role, 0.0)) for role in ("nurse", "lab", "pharmacist", "physician")]
+    log_end(success=bool(passed), steps=steps, score=float(score or 0.0), rewards=rewards)
 
 
 def main():
     client: Optional[OpenAI] = None
     if not API_KEY:
-        log("WARN", "No API_KEY / HF_TOKEN -- using heuristic baseline for all episodes")
+        log("WARN", "No OPENAI_API_KEY / HF_TOKEN / API_KEY -- using heuristic baseline for all episodes")
     else:
         try:
             client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)

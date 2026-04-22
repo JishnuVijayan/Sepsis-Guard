@@ -13,6 +13,7 @@ SYSTEM_PROMPTS = {
 def build_role_prompt(obs: Dict[str, Any], role: str) -> str:
     return (
         f"<SYS>{SYSTEM_PROMPTS[role]}</SYS>\n"
+        f"Role: {role}\n"
         f"Observation:\n{json.dumps(obs, default=str)[:3000]}\n"
         f"Action (JSON):"
     )

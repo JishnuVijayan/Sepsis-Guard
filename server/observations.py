@@ -92,17 +92,22 @@ def build_observations(
     cumulative_rewards: Dict[str, float],
     last_results: Dict[str, Optional[str]],
     pending_labs_summary: List[Dict[str, Any]],
+    full_info_sharing: bool = False,
 ) -> Dict[str, Any]:
     by_patient: Dict[str, List[AgentFlag]] = {}
     for f in active_flags_this_tick:
         by_patient.setdefault(f.patient_id, []).append(f)
 
     nurse_ids = set(nurse_assignment.get("nurse", []))
+    nurse_patient_rows = [
+        _nurse_patient_view(p)
+        for p in patients if full_info_sharing or p.patient_id in nurse_ids
+    ]
     nurse_obs = NurseObservation(
         done=False, reward=0.0,
         tick=tick, max_ticks=max_ticks, task_name=task_name,
         assigned_patient_ids=sorted(nurse_ids),
-        patient_vitals=[_nurse_patient_view(p) for p in patients if p.patient_id in nurse_ids],
+        patient_vitals=nurse_patient_rows,
         pharmacist_flags_this_tick=[
             f for f in active_flags_this_tick if f.source_role == "pharmacist"
         ],
@@ -138,8 +143,24 @@ def build_observations(
     escalated_patient_ids = {f.patient_id for f in active_flags_this_tick}
     known_summaries = [
         _physician_known_patient(p, by_patient.get(p.patient_id, []))
-        for p in patients if p.patient_id in escalated_patient_ids
+        for p in patients if full_info_sharing or p.patient_id in escalated_patient_ids
     ]
+    if full_info_sharing:
+        for p, summary in zip(patients, known_summaries):
+            summary.setdefault("vitals_snapshot", {
+                "heart_rate": round(p.heart_rate, 1),
+                "systolic_bp": round(p.systolic_bp, 1),
+                "respiratory_rate": round(p.respiratory_rate, 1),
+                "temperature": round(p.temperature, 2),
+                "oxygen_saturation": round(p.oxygen_saturation, 1),
+            })
+            summary.setdefault("lab_snapshot", {
+                "lactate": p.lactate,
+                "wbc": p.wbc,
+                "procalcitonin": p.procalcitonin,
+                "creatinine": p.creatinine,
+                "blood_culture_result": p.blood_culture_result,
+            })
     physician_obs = PhysicianObservation(
         done=False, reward=0.0,
         tick=tick, max_ticks=max_ticks, task_name=task_name,

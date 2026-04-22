@@ -59,6 +59,18 @@ team_score = 0.40 * (treated_in_time / sepsis_patients)
            + 0.15 * time_efficiency
 ```
 
+## Baseline Scores
+
+Heuristic baseline results are reproducible with `seed=42`.
+
+| Task | Score | Passed |
+|---|---:|---|
+| task1_textbook | 0.7500 | Yes |
+| task2_atypical | 0.4625 | No |
+| task3_high_acuity | 0.2875 | No |
+
+`inference.py` supports `OPENAI_API_KEY` first, then `HF_TOKEN`, then `API_KEY` as a fallback.
+
 ## API Endpoints
 
 | Method | Path | Purpose |
@@ -93,11 +105,40 @@ docker run -p 7860:7860 sepsisguard
 
 Training uses TRL GRPO with a single model serving all 4 roles via role-conditioned prompts. See `training/colab_training.ipynb` for the full pipeline.
 
+Important: use live environment-backed reward shaping for actual learning. The
+`training.reward_shaping.make_online_sepsis_reward_fn(...)` factory connects
+GRPO rewards to `/reset` + `/step` calls for the model's newly generated
+completions. The legacy `sepsis_reward_fn` is kept as an offline compatibility
+fallback only.
+
 ```
 # Rollout collection → Reward scoring → GRPO update
 # 4 agents x 200 steps x 8 completions = 6,400 LLM calls per run
 # Target model: Qwen2.5-3B-Instruct (4-bit) on Colab T4
 ```
+
+Colab snippet for online reward:
+
+```python
+from training.reward_shaping import make_online_sepsis_reward_fn
+
+reward_fn = make_online_sepsis_reward_fn(
+  env_url="https://YOUR-USERNAME-sepsisguard.hf.space",
+  task_name="task1_textbook",
+  seed=42,
+)
+
+trainer = GRPOTrainer(
+  model=model,
+  reward_funcs=[reward_fn],
+  args=cfg,
+  train_dataset=train_dataset,
+)
+```
+
+Notes:
+- The Docker image excludes `training/` intentionally because training is run in Colab/HF notebooks, while the container serves the OpenEnv runtime and baseline inference.
+- `reward_range` in `openenv.yaml` reflects per-step reward magnitude; cumulative episode rewards can exceed that interval.
 
 ## Project Structure
 
