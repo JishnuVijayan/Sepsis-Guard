@@ -29,9 +29,21 @@ from server.rewards import (
 )
 
 
+class _StateProxy:
+    """Compatibility wrapper that behaves like a SepsisState and is callable."""
+
+    def __init__(self, env: "SepsisEnvironment") -> None:
+        self._env = env
+
+    def __call__(self) -> SepsisState:
+        return self._env._build_state()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._env._build_state(), name)
+
+
 class SepsisEnvironment(Environment):
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
-    _last_grader_data: Dict[str, Any] = {}
 
     def __init__(self) -> None:
         super().__init__()
@@ -54,6 +66,7 @@ class SepsisEnvironment(Environment):
         self._coord_events: Dict[str, int] = {"total": 0, "max_possible": 1}
         self._flag_counts: Dict[str, int] = {}
         self._prev_lives_metrics: Dict[str, int] = {"lives_saved": 0, "lives_lost": 0}
+        self._last_grader_data: Dict[str, Any] = {}
 
     def reset(
         self, seed: Optional[int] = None, episode_id: Optional[str] = None,
@@ -185,7 +198,7 @@ class SepsisEnvironment(Environment):
             for k in per_agent_rewards:
                 per_agent_rewards[k] += terminal_bonus
                 self._cumulative_rewards[k] += terminal_bonus
-            SepsisEnvironment._last_grader_data = {
+            self._last_grader_data = {
                 "task": self._task_name,
                 "score": score,
                 "agent_rewards": dict(self._cumulative_rewards),
@@ -203,8 +216,7 @@ class SepsisEnvironment(Environment):
             per_agent_rewards=per_agent_rewards, team_reward=team_delta, done=self._done,
         )
 
-    @property
-    def state(self) -> SepsisState:
+    def _build_state(self) -> SepsisState:
         return SepsisState(
             episode_id=None, step_count=self._tick,
             task_name=self._task_name,
@@ -229,6 +241,14 @@ class SepsisEnvironment(Environment):
             patients_with_sepsis=sum(1 for p in self._patients if p.infection_present),
             total_escalations=self._total_escalations,
         )
+
+    @property
+    def state(self) -> _StateProxy:
+        return _StateProxy(self)
+
+    @property
+    def last_grader_data(self) -> Dict[str, Any]:
+        return dict(self._last_grader_data)
 
     def get_metadata(self) -> EnvironmentMetadata:
         return EnvironmentMetadata(
@@ -263,6 +283,7 @@ class SepsisEnvironment(Environment):
             cumulative_rewards=self._cumulative_rewards,
             last_results=self._last_results,
             pending_labs_summary=pending,
+            full_info_sharing=bool(self._task_cfg.get("full_info_sharing", False)),
         )
         rewards = per_agent_rewards or {"nurse": 0.0, "lab": 0.0, "pharmacist": 0.0, "physician": 0.0}
         for role, o in obs.items():

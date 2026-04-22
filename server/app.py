@@ -68,7 +68,7 @@ def tasks():
 
 @app.get("/grader")
 def grader():
-    data = SepsisEnvironment._last_grader_data
+    data = _env.last_grader_data
     if not data:
         return {"status": "no_episode_completed"}
     return {"status": "ok", **data}
@@ -100,7 +100,7 @@ def baseline():
             }
             bundle = env.step({"actions": actions})
             done = bundle["done"]
-        grader_data = SepsisEnvironment._last_grader_data
+        grader_data = env.last_grader_data
         results.append({
             "task": task_name,
             "score": grader_data.get("score"),
