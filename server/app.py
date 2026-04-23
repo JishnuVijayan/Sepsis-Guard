@@ -1,7 +1,9 @@
 from __future__ import annotations
 import os
-from typing import Any, Dict
-from fastapi import FastAPI, Body, HTTPException
+import uuid
+import threading
+from typing import Any, Dict, Optional
+from fastapi import FastAPI, Body, HTTPException, Header
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -10,7 +12,22 @@ from server.config import TASK_CONFIGS
 from models import StepRequest
 
 app = FastAPI(title="SepsisGuard OpenEnv", version="0.1.0")
-_env = SepsisEnvironment()
+
+_lock = threading.Lock()
+_sessions: Dict[str, SepsisEnvironment] = {}
+_default_env = SepsisEnvironment()
+
+MAX_SESSIONS = 64
+
+
+def _get_env(session_id: Optional[str]) -> SepsisEnvironment:
+    if not session_id:
+        return _default_env
+    with _lock:
+        env = _sessions.get(session_id)
+    if env is None:
+        raise HTTPException(404, f"Session {session_id} not found. Call /reset first.")
+    return env
 
 
 class ResetBody(BaseModel):
@@ -24,8 +41,30 @@ def health():
 
 
 @app.post("/reset")
-def reset(body: ResetBody = Body(default_factory=ResetBody)):
-    return _env.reset(seed=body.seed, task_name=body.task_name)
+def reset(
+    body: ResetBody = Body(default_factory=ResetBody),
+    x_session_id: Optional[str] = Header(None),
+):
+    if x_session_id:
+        session_id = x_session_id
+    else:
+        session_id = None
+
+    if session_id:
+        with _lock:
+            if session_id not in _sessions:
+                if len(_sessions) >= MAX_SESSIONS:
+                    oldest = next(iter(_sessions))
+                    del _sessions[oldest]
+                _sessions[session_id] = SepsisEnvironment()
+            env = _sessions[session_id]
+    else:
+        env = _default_env
+
+    result = env.reset(seed=body.seed, task_name=body.task_name)
+    if session_id:
+        result["session_id"] = session_id
+    return result
 
 
 class StepBody(BaseModel):
@@ -33,24 +72,33 @@ class StepBody(BaseModel):
 
 
 @app.post("/step")
-def step(body: StepBody):
+def step(
+    body: StepBody,
+    x_session_id: Optional[str] = Header(None),
+):
+    env = _get_env(x_session_id)
     try:
-        return _env.step({"actions": body.actions})
+        return env.step({"actions": body.actions})
     except (ValueError, KeyError, TypeError) as e:
         raise HTTPException(422, str(e))
 
 
 @app.get("/state")
-def get_state():
-    return _env.state.model_dump()
+def get_state(x_session_id: Optional[str] = Header(None)):
+    env = _get_env(x_session_id)
+    return env.state.model_dump()
 
 
 @app.post("/observations")
-def get_observations(payload: Dict[str, str] = Body(...)):
+def get_observations(
+    payload: Dict[str, str] = Body(...),
+    x_session_id: Optional[str] = Header(None),
+):
     role = payload.get("agent_role") or payload.get("role")
     if role not in ("nurse", "lab", "pharmacist", "physician"):
         raise HTTPException(400, f"Invalid role: {role}")
-    bundle = _env._build_obs_bundle()
+    env = _get_env(x_session_id)
+    bundle = env._build_obs_bundle()
     return bundle["observations"][role]
 
 
@@ -70,8 +118,9 @@ def tasks():
 
 
 @app.get("/grader")
-def grader():
-    data = _env.last_grader_data
+def grader(x_session_id: Optional[str] = Header(None)):
+    env = _get_env(x_session_id)
+    data = env.last_grader_data
     if not data:
         return {"status": "no_episode_completed"}
     return {"status": "ok", **data}
@@ -112,6 +161,26 @@ def baseline():
     return {"results": results}
 
 
+@app.post("/session")
+def create_session():
+    session_id = uuid.uuid4().hex[:12]
+    with _lock:
+        if len(_sessions) >= MAX_SESSIONS:
+            oldest = next(iter(_sessions))
+            del _sessions[oldest]
+        _sessions[session_id] = SepsisEnvironment()
+    return {"session_id": session_id}
+
+
+@app.delete("/session/{session_id}")
+def delete_session(session_id: str):
+    with _lock:
+        if session_id in _sessions:
+            del _sessions[session_id]
+            return {"status": "deleted"}
+    raise HTTPException(404, f"Session {session_id} not found")
+
+
 @app.get("/", response_class=HTMLResponse)
 def root():
     return """
@@ -132,7 +201,7 @@ def root():
 try:
     from server.dashboard import build_dashboard
     import gradio as gr
-    demo = build_dashboard(_env)
+    demo = build_dashboard(_default_env)
     app = gr.mount_gradio_app(app, demo, path="/dashboard")
 except Exception as e:
     print(f"[WARN] Dashboard not mounted: {e}")

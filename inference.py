@@ -169,7 +169,7 @@ def run_task(task_name: str, seed: int, client: Optional[OpenAI]):
         log_step(
             step=steps,
             action=action_str,
-            reward=float(bundle.get("team_reward", 0.0)),
+            reward=float(sum(bundle.get("rewards", {}).values())),
             done=done,
             error=step_error,
         )

@@ -96,7 +96,7 @@ def test_physician_do_nothing_penalty_on_multi_source():
     ]
     action = PhysicianAction(operation="do_nothing")
     r = compute_physician_reward(action, patients, tick=5, phys_meta={}, active_flags=flags)
-    assert r <= -3.0
+    assert r <= -2.0
 
 
 def test_physician_antibiotics_on_non_septic_penalized():

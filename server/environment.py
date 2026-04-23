@@ -43,7 +43,7 @@ class _StateProxy:
 
 
 class SepsisEnvironment(Environment):
-    SUPPORTS_CONCURRENT_SESSIONS: bool = False
+    SUPPORTS_CONCURRENT_SESSIONS: bool = True
 
     def __init__(self) -> None:
         super().__init__()
