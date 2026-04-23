@@ -164,8 +164,18 @@ def compute_physician_reward(
             if p and _patient_truly_sepsis(p) and p.antibiotics_administered is None:
                 sources = {f.source_role for f in active_flags if f.patient_id == pid}
                 if len(sources) >= 2:
-                    r -= 3.0
-                    break
+                    r -= 2.0
+                elif len(sources) == 1:
+                    r -= 0.8
+    elif action.operation == "order_antibiotics" and action.patient_id:
+        p = next((p for p in patients if p.patient_id == action.patient_id), None)
+        if p and not p.infection_present:
+            escalation_sources = {
+                f.source_role for f in active_flags
+                if f.patient_id == action.patient_id
+            }
+            if len(escalation_sources) == 0:
+                r -= 2.0
     return r
 
 
@@ -176,7 +186,7 @@ def compute_team_reward_delta(
     lives_lost_now = sum(1 for p in patients if p.outcome == Outcome.DIED)
     delta_saved = lives_saved_now - prev_metrics.get("lives_saved", 0)
     delta_lost = lives_lost_now - prev_metrics.get("lives_lost", 0)
-    team_delta = 0.1 * delta_saved - 0.05 * delta_lost
+    team_delta = 1.0 * delta_saved - 0.5 * delta_lost
     new_metrics = {"lives_saved": lives_saved_now, "lives_lost": lives_lost_now}
     return team_delta, new_metrics
 
@@ -220,4 +230,4 @@ def compute_terminal_team_score(
         "time_efficiency": round(time_efficiency, 3),
         "avg_time_to_antibiotics_hours": round(avg_time_to_abx, 2),
     }
-    return round(max(0.0, min(1.0, score)), 4), metrics
+    return round(max(0.002, min(0.998, score)), 4), metrics
