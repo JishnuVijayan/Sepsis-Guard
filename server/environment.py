@@ -18,7 +18,7 @@ from models import (
 )
 from server.config import DEFAULT_TASK, TASK_CONFIGS, Outcome
 from server.physiology import (
-    generate_patients, advance_physiology, mature_pending_labs,
+    generate_patients, advance_physiology, mature_pending_labs, order_lab_test,
 )
 from server.observations import build_observations
 from server.resolution import resolve_step
@@ -43,7 +43,7 @@ class _StateProxy:
 
 
 class SepsisEnvironment(Environment):
-    SUPPORTS_CONCURRENT_SESSIONS: bool = True
+    SUPPORTS_CONCURRENT_SESSIONS: bool = False
 
     def __init__(self) -> None:
         super().__init__()
@@ -109,6 +109,8 @@ class SepsisEnvironment(Environment):
         self._prev_lives_metrics = {"lives_saved": 0, "lives_lost": 0}
 
         for p in self._patients:
+            order_lab_test(p, "lactate", self._tick, 0)
+            order_lab_test(p, "wbc", self._tick, 0)
             mature_pending_labs(p, self._tick, self._rng)
 
         return self._build_obs_bundle()
@@ -120,6 +122,9 @@ class SepsisEnvironment(Environment):
         if isinstance(action, dict):
             if "actions" in action:
                 action = action["actions"]
+            missing = {"nurse", "lab", "pharmacist", "physician"} - set(action.keys())
+            if missing:
+                raise ValueError(f"Missing role actions: {missing}")
             request = StepRequest(
                 nurse=NurseAction(**action["nurse"]),
                 lab=LabAction(**action["lab"]),
@@ -152,14 +157,18 @@ class SepsisEnvironment(Environment):
                 )
 
         r_nurse = compute_nurse_reward(request.nurse, self._patients, new_flags, self._flag_counts)
-        r_lab = compute_lab_reward(request.lab, self._patients, new_flags)
-        r_pharm = compute_pharmacist_reward(request.pharmacist, self._patients)
+        r_lab = compute_lab_reward(request.lab, self._patients, new_flags, self._flag_counts)
+        r_pharm = compute_pharmacist_reward(request.pharmacist, self._patients, new_flags, self._flag_counts)
         r_phys = compute_physician_reward(
             request.physician, self._patients, self._tick, phys_meta, new_flags,
         )
 
         for p in self._patients:
             advance_physiology(p, self._tick, self._rng)
+            if self._tick % 12 == 0:
+                lab_delay = self._task_cfg["lab_result_delay"]
+                order_lab_test(p, "lactate", self._tick, lab_delay)
+                order_lab_test(p, "wbc", self._tick, lab_delay)
             mature_pending_labs(p, self._tick, self._rng)
 
         team_delta, self._prev_lives_metrics = compute_team_reward_delta(

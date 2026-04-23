@@ -34,7 +34,10 @@ class StepBody(BaseModel):
 
 @app.post("/step")
 def step(body: StepBody):
-    return _env.step({"actions": body.actions})
+    try:
+        return _env.step({"actions": body.actions})
+    except (ValueError, KeyError, TypeError) as e:
+        raise HTTPException(422, str(e))
 
 
 @app.get("/state")

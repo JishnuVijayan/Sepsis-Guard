@@ -105,9 +105,8 @@ def advance_physiology(
                 patient.outcome = Outcome.SEPTIC_SHOCK
                 patient.mental_status = MentalStatus.CONFUSED
             if sev > 0.95:
-                critical_ticks = patient.model_extra.get("_critical_ticks", 0) + 1
-                patient.model_extra["_critical_ticks"] = critical_ticks
-                if critical_ticks >= 4:
+                patient.critical_ticks += 1
+                if patient.critical_ticks >= 4:
                     patient.outcome = Outcome.DIED
                     patient.mental_status = MentalStatus.UNRESPONSIVE
 

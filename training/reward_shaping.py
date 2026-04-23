@@ -61,10 +61,14 @@ class OnlineSepsisReward:
     5) Returns the role-specific reward plus a JSON-format bonus.
     """
 
-    def __init__(self, env_url: str, task_name: str = "task1_textbook", seed: int = 42) -> None:
+    def __init__(
+        self, env_url: str, task_name: str = "task1_textbook",
+        seed: int = 42, max_steps_per_eval: int = 48,
+    ) -> None:
         self.env_url = env_url.rstrip("/")
         self.task_name = task_name
         self.seed = seed
+        self.max_steps_per_eval = max_steps_per_eval
         self._nurse = HeuristicNurse()
         self._lab = HeuristicLab()
         self._pharmacist = HeuristicPharmacist()
@@ -102,7 +106,17 @@ class OnlineSepsisReward:
                 actions = self._baseline_actions(observations)
                 actions[role] = _parse_action(completion, role)
                 result = self._step(actions)
-                env_r = float(result["rewards"].get(role, 0.0))
+                cumulative_r = float(result["rewards"].get(role, 0.0))
+                done = result.get("done", False)
+                steps = 1
+                while not done and steps < self.max_steps_per_eval:
+                    obs = result["observations"]
+                    actions = self._baseline_actions(obs)
+                    result = self._step(actions)
+                    cumulative_r += float(result["rewards"].get(role, 0.0))
+                    done = result.get("done", False)
+                    steps += 1
+                env_r = cumulative_r / max(1, steps)
             except Exception:
                 env_r = -0.5
             format_bonus = 0.2 if is_valid_action_json(completion) else -0.3
@@ -114,9 +128,13 @@ def make_online_sepsis_reward_fn(
     env_url: str,
     task_name: str = "task1_textbook",
     seed: int = 42,
+    max_steps_per_eval: int = 48,
 ) -> Callable[[List[str], List[str]], List[float]]:
     """Factory for online, live environment reward shaping used by GRPO."""
-    return OnlineSepsisReward(env_url=env_url, task_name=task_name, seed=seed)
+    return OnlineSepsisReward(
+        env_url=env_url, task_name=task_name, seed=seed,
+        max_steps_per_eval=max_steps_per_eval,
+    )
 
 
 def sepsis_reward_fn(completions: List[str], prompts: List[str], **kwargs: Any) -> List[float]:

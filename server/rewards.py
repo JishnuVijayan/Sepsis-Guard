@@ -46,12 +46,12 @@ def compute_nurse_reward(
                 and p.patient_id not in nurse_patients_escalated
                 and p.antibiotics_administered is None):
             r -= 2.0
-            break
     return r
 
 
 def compute_lab_reward(
     action: LabAction, patients: List[PatientState], flags_this_tick: List[AgentFlag],
+    prior_flag_counts: Dict[str, int] | None = None,
 ) -> float:
     r = 0.0
     if action.operation == "flag_critical" and action.patient_id:
@@ -63,33 +63,65 @@ def compute_lab_reward(
             p.procalcitonin is not None and p.procalcitonin > 0.5,
         ])
         if abnormal_lab and _patient_truly_sepsis(p):
-            r += 1.2
+            prior = (prior_flag_counts or {}).get(action.patient_id, 0)
+            if prior == 0:
+                r += 1.2
+            elif prior < 3:
+                r += 0.3
+            else:
+                r -= 0.1
         elif not abnormal_lab:
             r -= 0.8
-    elif action.operation == "recommend_followup_test":
-        r += 0.4
+    elif action.operation == "recommend_followup_test" and action.patient_id:
+        p = next((p for p in patients if p.patient_id == action.patient_id), None)
+        if p is None:
+            r -= 0.3
+        elif _patient_truly_sepsis(p):
+            r += 0.4
+        else:
+            r -= 0.2
     return r
 
 
 def compute_pharmacist_reward(
     action: PharmacistAction, patients: List[PatientState],
+    active_flags: List[AgentFlag] | None = None,
+    prior_flag_counts: Dict[str, int] | None = None,
 ) -> float:
     r = 0.0
+    prior = (prior_flag_counts or {}).get(action.patient_id or "", 0) if action.patient_id else 0
     if action.operation == "flag_immunosuppression" and action.patient_id:
         p = next((p for p in patients if p.patient_id == action.patient_id), None)
         if p and p.immunocompromised:
-            r += 1.0
+            r += 1.0 if prior == 0 else (0.2 if prior < 3 else -0.1)
         else:
             r -= 0.3
-    elif action.operation == "recommend_antibiotic":
-        if action.drug and action.drug in ANTIBIOGRAM:
+    elif action.operation == "recommend_antibiotic" and action.patient_id:
+        p = next((p for p in patients if p.patient_id == action.patient_id), None)
+        if p is None:
+            r -= 0.3
+        elif action.drug and action.drug in ANTIBIOGRAM:
             resistance = ANTIBIOGRAM[action.drug]
+            has_signal = False
+            if active_flags:
+                has_signal = any(
+                    f.patient_id == action.patient_id and f.flag_type == "critical_lab"
+                    for f in active_flags
+                )
+            if not has_signal:
+                has_signal = p.infection_present and p.infection_severity > 0.3
             if resistance > 0.40:
                 r -= 0.6
+            elif has_signal:
+                r += 0.8 if prior < 2 else 0.1
             else:
-                r += 0.8
-    elif action.operation == "flag_interaction":
-        r += 0.3
+                r += 0.1 if prior == 0 else 0.0
+    elif action.operation == "flag_interaction" and action.patient_id:
+        p = next((p for p in patients if p.patient_id == action.patient_id), None)
+        if p and len(p.current_medications) >= 2:
+            r += 0.3
+        else:
+            r -= 0.1
     return r
 
 
@@ -101,7 +133,7 @@ def compute_physician_reward(
     if phys_meta.get("antibiotics_ordered"):
         p = next((p for p in patients if p.patient_id == action.patient_id), None)
         if p is None: return 0.0
-        if phys_meta.get("on_false_alarm"):
+        if phys_meta.get("on_false_alarm") or not p.infection_present:
             r -= 1.5
         elif phys_meta.get("on_valid_escalation"):
             onset = p.sepsis_onset_tick
@@ -160,7 +192,7 @@ def compute_terminal_team_score(
         if p.antibiotics_administered is not None
         and p.sepsis_onset_tick is not None
         and p.antibiotic_tick is not None
-        and (p.antibiotic_tick - p.sepsis_onset_tick) / 2.0 <= 3.0
+        and (p.antibiotic_tick - p.sepsis_onset_tick) / 2.0 <= 4.0
     )
     false_alarm_rate = (total_false_escalations / max(1, total_escalations))
     coord_events = coordination_events.get("total", 0)
