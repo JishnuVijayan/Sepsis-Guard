@@ -52,6 +52,7 @@ class PatientState(BaseModel):
     antibiotic_tick: Optional[int] = None
     icu_admitted: bool = False
     outcome: Outcome = Outcome.STABLE
+    critical_ticks: int = 0
 
 
 class AgentFlag(BaseModel):
