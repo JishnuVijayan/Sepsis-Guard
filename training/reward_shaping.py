@@ -3,7 +3,8 @@ import json
 import os
 import re
 import uuid
-from typing import List, Dict, Any, Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Dict, Any, Callable, Tuple
 
 import requests
 
@@ -40,8 +41,11 @@ def _parse_action(text: str, role: str) -> Dict[str, Any]:
     return {"operation": "noop" if role != "physician" else "do_nothing"}
 
 
+_ROLE_RE = re.compile(r"Role:\s*(nurse|lab|pharmacist|physician)", re.IGNORECASE)
+
+
 def _role_from_prompt(prompt: str) -> str:
-    m = re.search(r"Role:\s*(nurse|lab|pharmacist|physician)", prompt, flags=re.IGNORECASE)
+    m = _ROLE_RE.search(prompt)
     if m:
         return m.group(1).lower()
     lowered = prompt.lower()
@@ -52,53 +56,69 @@ def _role_from_prompt(prompt: str) -> str:
 
 
 class OnlineSepsisReward:
-    """Live environment reward function for GRPO training.
+    """Live environment reward for GRPO training.
 
-    For each completion, this function:
-    1) Infers role from prompt.
-    2) Builds a full 4-role action bundle using heuristics for non-target roles.
-    3) Injects the generated action for the target role at EVERY step.
-    4) Calls /reset then /step on the live environment using a dedicated session.
-    5) Returns the role-specific reward averaged over all steps.
+    Runs a short evaluation window per completion:
+      1) Warmup: heuristic-only ticks to build realistic patient state
+      2) Inject: LLM action replaces the target role, accumulate per-step rewards
+      3) Compare against cached baseline (all-heuristic) for the same window
+      4) Return scaled advantage
+
+    Optimizations vs naive full-episode eval:
+      - 12 ticks per eval instead of 48 (warmup 4 + inject 8)
+      - Per-step reward accumulation, no /grader call needed
+      - Baseline cached by (seed, role) — never recomputed
+      - Thread-parallel evaluation of independent completions
+      - HTTP connection pooling via requests.Session
+      - Quick-reject for noop / missing patient_id actions
     """
 
     def __init__(
         self, env_url: str, task_name: str = "task1_textbook",
-        seed: int = 42, max_steps_per_eval: int = 5,
+        seed: int = 42, warmup_ticks: int = 4, inject_ticks: int = 8,
+        max_workers: int = 4,
     ) -> None:
         self.env_url = env_url.rstrip("/")
         self.task_name = task_name
         self.seed = seed
-        self.max_steps_per_eval = max_steps_per_eval
+        self.warmup_ticks = warmup_ticks
+        self.inject_ticks = inject_ticks
         self._nurse = HeuristicNurse()
         self._lab = HeuristicLab()
         self._pharmacist = HeuristicPharmacist()
         self._physician = HeuristicPhysician()
+        self._baseline_cache: Dict[Tuple[int, str], float] = {}
+        self._http = requests.Session()
+        self._http.headers.update({"Content-Type": "application/json"})
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
-    def _headers(self, session_id: str | None = None) -> Dict[str, str]:
-        if session_id:
-            return {"X-Session-Id": session_id}
-        return {}
-
-    def _reset(self, seed: int, session_id: str | None = None) -> Dict[str, Any]:
-        r = requests.post(
+    def _reset(self, seed: int, session_id: str) -> Dict[str, Any]:
+        r = self._http.post(
             f"{self.env_url}/reset",
             json={"task_name": self.task_name, "seed": seed},
-            headers=self._headers(session_id),
+            headers={"X-Session-Id": session_id},
             timeout=30,
         )
         r.raise_for_status()
         return r.json()
 
-    def _step(self, actions: Dict[str, Dict[str, Any]], session_id: str | None = None) -> Dict[str, Any]:
-        r = requests.post(
+    def _step(self, actions: Dict[str, Dict[str, Any]], session_id: str) -> Dict[str, Any]:
+        r = self._http.post(
             f"{self.env_url}/step",
             json={"actions": actions},
-            headers=self._headers(session_id),
+            headers={"X-Session-Id": session_id},
             timeout=30,
         )
         r.raise_for_status()
         return r.json()
+
+    def _delete_session(self, session_id: str) -> None:
+        try:
+            self._http.delete(
+                f"{self.env_url}/session/{session_id}", timeout=5
+            )
+        except Exception:
+            pass
 
     def _baseline_actions(self, observations: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         return {
@@ -108,63 +128,135 @@ class OnlineSepsisReward:
             "physician": self._physician.decide(observations["physician"]),
         }
 
-    def __call__(self, completions: List[str], prompts: List[str], **kwargs: Any) -> List[float]:
-        rewards: List[float] = []
-        for i, (completion, prompt) in enumerate(zip(completions, prompts)):
-            role = _role_from_prompt(prompt)
-            session_id = uuid.uuid4().hex[:12]
-            try:
-                llm_action = _parse_action(completion, role)
-                bundle = self._reset(self.seed + i, session_id)
-                observations = bundle["observations"]
-                actions = self._baseline_actions(observations)
-                actions[role] = llm_action
-                result = self._step(actions, session_id)
-                cumulative_r = float(result["rewards"].get(role, 0.0))
-                done = result.get("done", False)
-                steps = 1
-                while not done and steps < self.max_steps_per_eval:
-                    obs = result["observations"]
-                    actions = self._baseline_actions(obs)
+    def _run_window(
+        self, seed: int, role: str, llm_action: Dict[str, Any] | None,
+    ) -> float:
+        """Run warmup + injection window, return accumulated role reward."""
+        session_id = uuid.uuid4().hex[:12]
+        try:
+            bundle = self._reset(seed, session_id)
+            done = False
+
+            for _ in range(self.warmup_ticks):
+                if done:
+                    break
+                actions = self._baseline_actions(bundle["observations"])
+                bundle = self._step(actions, session_id)
+                done = bundle.get("done", False)
+
+            accumulated = 0.0
+            for _ in range(self.inject_ticks):
+                if done:
+                    break
+                actions = self._baseline_actions(bundle["observations"])
+                if llm_action is not None:
                     actions[role] = llm_action
-                    result = self._step(actions, session_id)
-                    cumulative_r += float(result["rewards"].get(role, 0.0))
-                    done = result.get("done", False)
-                    steps += 1
-                env_r = cumulative_r / max(1, steps)
-            except Exception:
-                env_r = -0.5
-            finally:
-                try:
-                    requests.delete(f"{self.env_url}/session/{session_id}", timeout=5)
-                except Exception:
-                    pass
-            parsed = _parse_action(completion, role)
-            if parsed.get("operation") in ("noop", "do_nothing"):
-                env_r -= 0.1
-            rewards.append(env_r)
+                bundle = self._step(actions, session_id)
+                accumulated += float(bundle.get("rewards", {}).get(role, 0.0))
+                done = bundle.get("done", False)
+
+            return accumulated
+        except Exception:
+            return -1.0 if llm_action is not None else 0.0
+        finally:
+            self._delete_session(session_id)
+
+    def _get_baseline(self, seed: int, role: str) -> float:
+        key = (seed, role)
+        if key in self._baseline_cache:
+            return self._baseline_cache[key]
+        score = self._run_window(seed, role, llm_action=None)
+        self._baseline_cache[key] = score
+        return score
+
+    def _eval_single(
+        self, idx: int, completion: str, prompt: str,
+    ) -> Tuple[int, float]:
+        """Evaluate one completion, return (index, reward)."""
+        role = _role_from_prompt(prompt)
+        llm_action = _parse_action(completion, role)
+        is_noop = llm_action.get("operation") in ("noop", "do_nothing")
+        has_patient = bool(llm_action.get("patient_id"))
+        has_rationale = bool(
+            llm_action.get("rationale", "").strip().replace("...", "")
+        )
+
+        if is_noop:
+            return idx, -0.3
+
+        if not has_patient:
+            return idx, -0.2
+
+        seed = self.seed + idx
+        baseline_r = self._get_baseline(seed, role)
+        llm_r = self._run_window(seed, role, llm_action)
+        advantage = llm_r - baseline_r
+
+        env_r = advantage * 2.0
+
+        if not has_rationale:
+            env_r -= 0.1
+
+        return idx, max(-1.0, min(1.0, env_r))
+
+    def __call__(
+        self, completions: List[str], prompts: List[str], **kwargs: Any,
+    ) -> List[float]:
+        rewards = [0.0] * len(completions)
+
+        futures = [
+            self._executor.submit(self._eval_single, i, c, p)
+            for i, (c, p) in enumerate(zip(completions, prompts))
+        ]
+        for future in as_completed(futures):
+            idx, reward = future.result()
+            rewards[idx] = reward
+
         return rewards
 
 
-def format_reward_fn(completions: List[str], prompts: List[str], **kwargs: Any) -> List[float]:
-    """Independent reward for valid JSON action format."""
-    return [0.3 if is_valid_action_json(c) else -0.5 for c in completions]
+def format_reward_fn(
+    completions: List[str], prompts: List[str], **kwargs: Any,
+) -> List[float]:
+    """Reward for valid JSON action format — scaled to not dominate env reward."""
+    rewards = []
+    for c in completions:
+        stripped = c.strip()
+        if not is_valid_action_json(stripped):
+            rewards.append(-0.3)
+            continue
+        parsed = json.loads(stripped)
+        score = 0.1
+        if parsed.get("patient_id"):
+            score += 0.05
+        rationale = parsed.get("rationale", parsed.get("reason", ""))
+        if rationale and len(rationale) > 10 and "..." not in rationale:
+            score += 0.05
+        elif rationale and ("..." in rationale or len(rationale) <= 3):
+            score -= 0.1
+        rewards.append(score)
+    return rewards
 
 
 def make_online_sepsis_reward_fn(
     env_url: str,
     task_name: str = "task1_textbook",
     seed: int = 42,
-    max_steps_per_eval: int = 5,
+    warmup_ticks: int = 4,
+    inject_ticks: int = 8,
+    max_workers: int = 4,
 ) -> Callable[[List[str], List[str]], List[float]]:
     """Factory for online, live environment reward shaping used by GRPO."""
     return OnlineSepsisReward(
         env_url=env_url, task_name=task_name, seed=seed,
-        max_steps_per_eval=max_steps_per_eval,
+        warmup_ticks=warmup_ticks, inject_ticks=inject_ticks,
+        max_workers=max_workers,
     )
 
 
-def sepsis_reward_fn(completions: List[str], prompts: List[str], **kwargs: Any) -> List[float]:
+def sepsis_reward_fn(
+    completions: List[str], prompts: List[str], **kwargs: Any,
+) -> List[float]:
     """Offline fallback reward function (metadata-linked, not environment-linked).
 
     Kept for compatibility; prefer make_online_sepsis_reward_fn for real training.
