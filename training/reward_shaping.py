@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -9,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Callable, Tuple
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 from agents.nurse import HeuristicNurse
 from agents.lab import HeuristicLab
@@ -77,7 +80,7 @@ class OnlineSepsisReward:
 
     def __init__(
         self, env_url: str, task_name: str = "task1_textbook",
-        seed: int = 42, warmup_ticks: int = 4, inject_ticks: int = 4,
+        seed: int = 42, warmup_ticks: int = 8, inject_ticks: int = 1,
         max_workers: int = 4,
     ) -> None:
         self.env_url = env_url.rstrip("/")
@@ -85,10 +88,6 @@ class OnlineSepsisReward:
         self.seed = seed
         self.warmup_ticks = warmup_ticks
         self.inject_ticks = inject_ticks
-        self._nurse = HeuristicNurse()
-        self._lab = HeuristicLab()
-        self._pharmacist = HeuristicPharmacist()
-        self._physician = HeuristicPhysician()
         self._baseline_cache: Dict[Tuple[int, str], float] = {}
         self._local = threading.local()
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -128,12 +127,19 @@ class OnlineSepsisReward:
         except Exception:
             pass
 
-    def _baseline_actions(self, observations: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    def _baseline_actions(
+        self,
+        observations: Dict[str, Any],
+        nurse: HeuristicNurse,
+        lab: HeuristicLab,
+        pharmacist: HeuristicPharmacist,
+        physician: HeuristicPhysician,
+    ) -> Dict[str, Dict[str, Any]]:
         return {
-            "nurse": self._nurse.decide(observations["nurse"]),
-            "lab": self._lab.decide(observations["lab"]),
-            "pharmacist": self._pharmacist.decide(observations["pharmacist"]),
-            "physician": self._physician.decide(observations["physician"]),
+            "nurse": nurse.decide(observations["nurse"]),
+            "lab": lab.decide(observations["lab"]),
+            "pharmacist": pharmacist.decide(observations["pharmacist"]),
+            "physician": physician.decide(observations["physician"]),
         }
 
     def _run_window(
@@ -141,6 +147,12 @@ class OnlineSepsisReward:
     ) -> float:
         """Run warmup + injection window, return accumulated role reward."""
         session_id = uuid.uuid4().hex[:12]
+        # Heuristic policies keep per-episode memory (e.g., recently flagged/escalated).
+        # Use fresh instances per window to prevent cross-window state leakage.
+        nurse = HeuristicNurse()
+        lab = HeuristicLab()
+        pharmacist = HeuristicPharmacist()
+        physician = HeuristicPhysician()
         try:
             bundle = self._reset(seed, session_id)
             done = False
@@ -148,7 +160,13 @@ class OnlineSepsisReward:
             for _ in range(self.warmup_ticks):
                 if done:
                     break
-                actions = self._baseline_actions(bundle["observations"])
+                actions = self._baseline_actions(
+                    bundle["observations"],
+                    nurse,
+                    lab,
+                    pharmacist,
+                    physician,
+                )
                 bundle = self._step(actions, session_id)
                 done = bundle.get("done", False)
 
@@ -156,7 +174,13 @@ class OnlineSepsisReward:
             for _ in range(self.inject_ticks):
                 if done:
                     break
-                actions = self._baseline_actions(bundle["observations"])
+                actions = self._baseline_actions(
+                    bundle["observations"],
+                    nurse,
+                    lab,
+                    pharmacist,
+                    physician,
+                )
                 if llm_action is not None:
                     actions[role] = llm_action
                 bundle = self._step(actions, session_id)
@@ -164,7 +188,9 @@ class OnlineSepsisReward:
                 done = bundle.get("done", False)
 
             return accumulated
-        except Exception:
+        except Exception as exc:
+            logger.warning("[OnlineSepsisReward] _run_window failed (seed=%d, role=%s): %s", seed, role, exc)
+            print(f"[REWARD WARN] _run_window failed (seed={seed}, role={role}): {exc}")
             return 0.0
         finally:
             self._delete_session(session_id)
@@ -213,6 +239,12 @@ class OnlineSepsisReward:
             idx, reward = future.result()
             rewards[idx] = reward
 
+        # Warn if too many zero rewards — likely server issue or inject timing
+        zero_count = sum(1 for r in rewards if r == 0.0)
+        if zero_count > len(rewards) * 0.7 and len(rewards) > 2:
+            print(f"[REWARD WARN] {zero_count}/{len(rewards)} rewards are 0.0 — "
+                  f"check server health or warmup_ticks setting")
+
         return rewards
 
 
@@ -254,8 +286,8 @@ def make_online_sepsis_reward_fn(
     env_url: str,
     task_name: str = "task1_textbook",
     seed: int = 42,
-    warmup_ticks: int = 4,
-    inject_ticks: int = 4,
+    warmup_ticks: int = 8,
+    inject_ticks: int = 1,
     max_workers: int = 4,
 ) -> Callable[[List[str], List[str]], List[float]]:
     """Factory for online, live environment reward shaping used by GRPO."""
