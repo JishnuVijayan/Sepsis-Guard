@@ -27,12 +27,47 @@ def is_valid_action_json(text: str) -> bool:
         return False
 
 
+_VALID_OPS: Dict[str, set] = {
+    "nurse": {"escalate_to_physician", "request_lab_test", "administer_medication", "flag_concern", "noop"},
+    "lab": {"release_result", "flag_critical", "recommend_followup_test", "noop"},
+    "pharmacist": {"flag_interaction", "flag_immunosuppression", "recommend_antibiotic", "check_dosing", "noop"},
+    "physician": {"order_antibiotics", "order_lab_test", "admit_to_icu", "request_consult", "do_nothing"},
+}
+
+_VALID_KEYS: Dict[str, set] = {
+    "nurse": {"operation", "patient_id", "urgency", "test_type", "rationale"},
+    "lab": {"operation", "patient_id", "test", "reason"},
+    "pharmacist": {"operation", "patient_id", "drug", "rationale"},
+    "physician": {"operation", "patient_id", "drug", "test", "specialty"},
+}
+
+def _default_op(role: str) -> str:
+    return "do_nothing" if role == "physician" else "noop"
+
+
+def _sanitize_action(parsed: Dict[str, Any], role: str) -> Dict[str, Any]:
+    """Ensure the action is valid for the role. Fix common LLM mistakes."""
+    op = parsed.get("operation", "")
+    # Fix cross-role operation mistakes
+    if role == "physician" and op == "noop":
+        op = "do_nothing"
+    elif role != "physician" and op == "do_nothing":
+        op = "noop"
+    # If operation still invalid for this role, fall back
+    if op not in _VALID_OPS.get(role, set()):
+        return {"operation": _default_op(role)}
+    parsed["operation"] = op
+    # Strip keys that Pydantic would reject for this role
+    valid_keys = _VALID_KEYS.get(role, set())
+    return {k: v for k, v in parsed.items() if k in valid_keys}
+
+
 def _parse_action(text: str, role: str) -> Dict[str, Any]:
     stripped = text.strip()
     try:
         parsed = json.loads(stripped)
         if isinstance(parsed, dict) and "operation" in parsed:
-            return parsed
+            return _sanitize_action(parsed, role)
     except Exception:
         pass
     m = re.search(r"\{[^{}]*\"operation\"[^{}]*\}", stripped)
@@ -40,10 +75,10 @@ def _parse_action(text: str, role: str) -> Dict[str, Any]:
         try:
             parsed = json.loads(m.group(0))
             if isinstance(parsed, dict) and "operation" in parsed:
-                return parsed
+                return _sanitize_action(parsed, role)
         except Exception:
             pass
-    return {"operation": "noop" if role != "physician" else "do_nothing"}
+    return {"operation": _default_op(role)}
 
 
 _ROLE_RE = re.compile(r"Role:\s*(nurse|lab|pharmacist|physician)", re.IGNORECASE)
