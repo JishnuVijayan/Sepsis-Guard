@@ -56,6 +56,7 @@ class SepsisEnvironment(Environment):
         self._patients: List[PatientState] = []
         self._nurse_assignment: Dict[str, List[str]] = {}
         self._active_flags: List[AgentFlag] = []
+        self._physician_memory: Dict[str, Dict[str, Any]] = {}
         self._physician_trust: float = 1.0
         self._cumulative_rewards: Dict[str, float] = {}
         self._total_team_reward: float = 0.0
@@ -63,9 +64,15 @@ class SepsisEnvironment(Environment):
         self._normalized_score: Optional[float] = None
         self._total_escalations: int = 0
         self._total_false_escalations: int = 0
+        self._total_alerts: int = 0
+        self._total_false_alerts: int = 0
         self._coord_events: Dict[str, int] = {"total": 0, "max_possible": 1}
         self._flag_counts: Dict[tuple, int] = {}
-        self._prev_lives_metrics: Dict[str, int] = {"lives_saved": 0, "lives_lost": 0}
+        self._prev_reward_state: Dict[str, Any] = {
+            "lives_saved": 0,
+            "lives_lost": 0,
+            "patient_utilities": {},
+        }
         self._last_grader_data: Dict[str, Any] = {}
 
     def reset(
@@ -93,6 +100,7 @@ class SepsisEnvironment(Environment):
             "nurse": [p.patient_id for p in self._patients[:n_assigned]]
         }
         self._active_flags = []
+        self._physician_memory = {}
         self._physician_trust = 1.0
         self._cumulative_rewards = {
             "nurse": 0.0, "lab": 0.0, "pharmacist": 0.0, "physician": 0.0, "team": 0.0,
@@ -102,15 +110,26 @@ class SepsisEnvironment(Environment):
         self._normalized_score = None
         self._total_escalations = 0
         self._total_false_escalations = 0
+        self._total_alerts = 0
+        self._total_false_alerts = 0
         self._coord_events = {
             "total": 0, "max_possible": max(2, 2 * self._task_cfg["n_sepsis_cases"]),
         }
         self._flag_counts = {}
-        self._prev_lives_metrics = {"lives_saved": 0, "lives_lost": 0}
+        self._prev_reward_state = {
+            "lives_saved": 0,
+            "lives_lost": 0,
+            "patient_utilities": {},
+        }
 
         for p in self._patients:
             order_lab_test(p, "lactate", self._tick, 0)
             order_lab_test(p, "wbc", self._tick, 0)
+            order_lab_test(p, "creatinine", self._tick, 0)
+            if self._rng.random() < 0.8:
+                order_lab_test(p, "platelets", self._tick, 0)
+            if self._rng.random() < 0.65:
+                order_lab_test(p, "bilirubin_total", self._tick, 1)
             mature_pending_labs(p, self._tick, self._rng)
 
         return self._build_obs_bundle()
@@ -136,12 +155,18 @@ class SepsisEnvironment(Environment):
         else:
             request = StepRequest.model_validate(action)
 
+        prior_patient_snapshots = self._snapshot_patients()
+
         new_flags, results, phys_meta = resolve_step(
             request, self._patients, self._tick,
             self._task_cfg["lab_result_delay"], self._physician_trust,
         )
         self._active_flags = new_flags
         self._last_results = results
+        self._update_physician_memory(new_flags, request)
+
+        # Snapshot BEFORE updating so reward functions see prior-tick counts (not this tick's).
+        prev_flag_counts = dict(self._flag_counts)
 
         for f in new_flags:
             key = (f.patient_id, f.source_role)
@@ -157,23 +182,36 @@ class SepsisEnvironment(Environment):
                     self._coord_events["total"] + 1,
                 )
 
-        r_nurse = compute_nurse_reward(request.nurse, self._patients, new_flags, self._flag_counts)
-        r_lab = compute_lab_reward(request.lab, self._patients, new_flags, self._flag_counts)
-        r_pharm = compute_pharmacist_reward(request.pharmacist, self._patients, new_flags, self._flag_counts)
+        r_nurse = compute_nurse_reward(
+            request.nurse, self._patients, self._tick, prior_patient_snapshots,
+        )
+        r_lab = compute_lab_reward(
+            request.lab, self._patients, self._tick, prior_patient_snapshots,
+        )
+        r_pharm = compute_pharmacist_reward(
+            request.pharmacist, self._patients, self._tick, prior_patient_snapshots, new_flags,
+        )
         r_phys = compute_physician_reward(
-            request.physician, self._patients, self._tick, phys_meta, new_flags,
+            request.physician, self._patients, self._tick, phys_meta, new_flags, prior_patient_snapshots,
         )
 
         for p in self._patients:
             advance_physiology(p, self._tick, self._rng)
-            if self._tick % 12 == 0:
-                lab_delay = self._task_cfg["lab_result_delay"]
+            lab_delay = self._task_cfg["lab_result_delay"]
+            if self._tick % 8 == 0:
                 order_lab_test(p, "lactate", self._tick, lab_delay)
                 order_lab_test(p, "wbc", self._tick, lab_delay)
+            if self._tick % 12 == 0:
+                order_lab_test(p, "creatinine", self._tick, lab_delay)
+                order_lab_test(p, "bun", self._tick, lab_delay)
+            if p.first_detection_tick is not None and self._tick % 16 == 0:
+                order_lab_test(p, "procalcitonin", self._tick, max(1, lab_delay))
+                order_lab_test(p, "bilirubin_total", self._tick, max(1, lab_delay))
+                order_lab_test(p, "platelets", self._tick, max(1, lab_delay))
             mature_pending_labs(p, self._tick, self._rng)
 
-        team_delta, self._prev_lives_metrics = compute_team_reward_delta(
-            self._patients, self._prev_lives_metrics,
+        team_delta, self._prev_reward_state = compute_team_reward_delta(
+            self._patients, self._prev_reward_state, tick=self._tick,
         )
 
         rewards_raw = {"nurse": r_nurse, "lab": r_lab, "pharmacist": r_pharm, "physician": r_phys}
@@ -189,10 +227,20 @@ class SepsisEnvironment(Environment):
                 p = next((p for p in self._patients if p.patient_id == f.patient_id), None)
                 if p is not None and not p.infection_present:
                     self._total_false_escalations += 1
+            if f.flag_type in ("escalation", "critical_lab"):
+                self._total_alerts += 1
+                p = next((p for p in self._patients if p.patient_id == f.patient_id), None)
+                if p is not None and not p.infection_present:
+                    self._total_false_alerts += 1
 
-        if self._total_escalations > 0:
-            false_rate = self._total_false_escalations / self._total_escalations
-            self._physician_trust = max(0.2, min(1.0, 1.0 - 0.8 * false_rate))
+        if phys_meta.get("on_false_alarm"):
+            self._total_alerts += 1
+            self._total_false_alerts += 1
+
+        if self._total_alerts > 0:
+            false_rate = self._total_false_alerts / self._total_alerts
+            coord_bonus = min(0.1, 0.02 * self._coord_events["total"])
+            self._physician_trust = max(0.2, min(1.0, 1.0 - 0.75 * false_rate + coord_bonus))
 
         self._tick += 1
         self._done = self._tick > self._task_cfg["max_steps"]
@@ -200,7 +248,7 @@ class SepsisEnvironment(Environment):
         terminal_bonus = 0.0
         if self._done:
             score, metrics = compute_terminal_team_score(
-                self._patients, self._total_escalations, self._total_false_escalations,
+                self._patients, self._total_alerts, self._total_false_alerts,
                 self._coord_events, self._task_cfg["max_steps"],
             )
             self._normalized_score = score
@@ -217,6 +265,8 @@ class SepsisEnvironment(Environment):
                     **metrics,
                     "total_escalations": self._total_escalations,
                     "total_false_escalations": self._total_false_escalations,
+                    "total_alerts": self._total_alerts,
+                    "total_false_alerts": self._total_false_alerts,
                     "success_threshold": self._task_cfg["success_threshold"],
                     "passed": score >= self._task_cfg["success_threshold"],
                 },
@@ -238,6 +288,8 @@ class SepsisEnvironment(Environment):
                     "bed_number": p.bed_number,
                     "outcome": p.outcome.value,
                     "infection_severity": round(p.infection_severity, 3),
+                    "qsofa_score": p.qsofa_score,
+                    "organ_dysfunction_score": round(p.organ_dysfunction_score, 3),
                     "antibiotics_administered": p.antibiotics_administered,
                     "icu_admitted": p.icu_admitted,
                 }
@@ -250,6 +302,10 @@ class SepsisEnvironment(Environment):
             normalized_score=self._normalized_score,
             patients_with_sepsis=sum(1 for p in self._patients if p.infection_present),
             total_escalations=self._total_escalations,
+            false_alarm_count=self._total_false_alerts,
+            detection_utility=float(self._last_grader_data.get("metrics", {}).get("detection_utility", 0.0)),
+            treatment_utility=float(self._last_grader_data.get("metrics", {}).get("treatment_utility", 0.0)),
+            coordination_score=float(self._last_grader_data.get("metrics", {}).get("coordination_score", 0.0)),
         )
 
     @property
@@ -294,6 +350,7 @@ class SepsisEnvironment(Environment):
             last_results=self._last_results,
             pending_labs_summary=pending,
             full_info_sharing=bool(self._task_cfg.get("full_info_sharing", False)),
+            physician_memory=self._physician_memory,
         )
         rewards = per_agent_rewards or {"nurse": 0.0, "lab": 0.0, "pharmacist": 0.0, "physician": 0.0}
         for role, o in obs.items():
@@ -311,5 +368,40 @@ class SepsisEnvironment(Environment):
                 "tick": self._tick,
                 "physician_trust": round(self._physician_trust, 3),
                 "active_flag_count": len(self._active_flags),
+                "total_alerts": self._total_alerts,
             },
         }
+
+    def _snapshot_patients(self) -> Dict[str, Dict[str, Any]]:
+        snapshots: Dict[str, Dict[str, Any]] = {}
+        for p in self._patients:
+            snapshots[p.patient_id] = {
+                "first_detection_tick": p.first_detection_tick,
+                "first_escalation_tick": p.first_escalation_tick,
+                "first_critical_lab_tick": p.first_critical_lab_tick,
+                "first_immunosuppression_flag_tick": p.first_immunosuppression_flag_tick,
+                "first_antibiotic_tick": p.first_antibiotic_tick,
+                "first_antibiotic_recommendation_tick": p.first_antibiotic_recommendation_tick,
+                "best_antibiotic_recommendation_score": p.best_antibiotic_recommendation_score,
+                "pending_labs": set(p.pending_labs.keys()),
+            }
+        return snapshots
+
+    def _update_physician_memory(self, new_flags: List[AgentFlag], request: StepRequest) -> None:
+        touched_ids = {f.patient_id for f in new_flags}
+        if request.physician.patient_id:
+            touched_ids.add(request.physician.patient_id)
+        for patient_id in touched_ids:
+            entry = self._physician_memory.setdefault(
+                patient_id,
+                {"first_seen_tick": self._tick, "flag_history": []},
+            )
+            entry["last_seen_tick"] = self._tick
+            for flag in [f for f in new_flags if f.patient_id == patient_id]:
+                entry["flag_history"].append({
+                    "tick": flag.tick,
+                    "source": flag.source_role,
+                    "type": flag.flag_type,
+                    "urgency": flag.urgency,
+                })
+            entry["flag_history"] = entry["flag_history"][-12:]

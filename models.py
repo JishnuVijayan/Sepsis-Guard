@@ -23,36 +23,74 @@ class PatientState(BaseModel):
     patient_id: str
     bed_number: int
     age: int
+    gender: int = 0
+    unit1: int = 0
+    unit2: int = 0
+    hosp_adm_time: float = -12.0
+    iculos_hours: float = 0.0
     admission_reason: str
 
     heart_rate: float
     systolic_bp: float
+    mean_arterial_pressure: float = 85.0
+    diastolic_bp: float = 70.0
     respiratory_rate: float
     temperature: float
     oxygen_saturation: float
+    end_tidal_co2: Optional[float] = None
     mental_status: MentalStatus = MentalStatus.ALERT
 
     lactate: Optional[float] = None
     wbc: Optional[float] = None
     procalcitonin: Optional[float] = None
     creatinine: Optional[float] = None
+    bun: Optional[float] = None
+    bilirubin_total: Optional[float] = None
+    platelets: Optional[float] = None
+    glucose: Optional[float] = None
+    hemoglobin: Optional[float] = None
+    ptt: Optional[float] = None
+    fibrinogen: Optional[float] = None
+    bicarbonate: Optional[float] = None
+    fio2: Optional[float] = None
+    ph: Optional[float] = None
+    paco2: Optional[float] = None
+    sao2: Optional[float] = None
+    base_excess: Optional[float] = None
     blood_culture_result: Optional[str] = None
 
     pending_labs: Dict[str, int] = Field(default_factory=dict)
+    last_measured_tick: Dict[str, int] = Field(default_factory=dict)
 
     current_medications: List[str] = Field(default_factory=list)
     immunocompromised: bool = False
 
     infection_present: bool = False
     infection_severity: float = 0.0
+    infection_start_tick: Optional[int] = None
     sepsis_onset_tick: Optional[int] = None
     is_false_alarm_patient: bool = False
+    qsofa_score: int = 0
+    organ_dysfunction_score: float = 0.0
 
     antibiotics_administered: Optional[str] = None
     antibiotic_tick: Optional[int] = None
     icu_admitted: bool = False
     outcome: Outcome = Outcome.STABLE
     critical_ticks: int = 0
+    false_alert_count: int = 0
+
+    first_abnormal_vitals_tick: Optional[int] = None
+    first_critical_lab_tick: Optional[int] = None
+    first_escalation_tick: Optional[int] = None
+    first_detection_tick: Optional[int] = None
+    first_physician_review_tick: Optional[int] = None
+    first_antibiotic_recommendation_tick: Optional[int] = None
+    first_antibiotic_tick: Optional[int] = None
+    first_icu_tick: Optional[int] = None
+    first_immunosuppression_flag_tick: Optional[int] = None
+    best_antibiotic_recommendation: Optional[str] = None
+    best_antibiotic_recommendation_score: float = 0.0
 
 
 class AgentFlag(BaseModel):
@@ -184,3 +222,6 @@ class SepsisState(State):
     lives_lost: int = 0
     total_escalations: int = 0
     correct_escalations: int = 0
+    detection_utility: float = 0.0
+    treatment_utility: float = 0.0
+    coordination_score: float = 0.0

@@ -18,6 +18,7 @@ import os, json, sys, re, textwrap
 from typing import Dict, Any, List, Optional
 import requests
 from openai import OpenAI
+from training.prompts import SYSTEM_PROMPTS, safe_truncate_obs
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("API_KEY")
@@ -25,42 +26,6 @@ MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://localhost:7860").rstrip("/")
 TASK = os.getenv("SEPSIS_TASK")
 ALL_TASKS = ["task1_textbook", "task2_atypical", "task3_high_acuity"]
-
-SYSTEM_PROMPTS = {
-    "nurse": textwrap.dedent("""
-        You are a bedside nurse in a hospital ward. You see vitals for your 5 assigned patients.
-        You cannot see lab values unless the lab flags them. You cannot see medications
-        unless the pharmacist flags them. Your job is to escalate to the physician when
-        a patient is deteriorating. Over-escalation causes alarm fatigue (the physician stops
-        listening). Under-escalation means patients die.
-        Respond with ONE JSON object matching NurseAction schema. No explanation.
-        Available ops: escalate_to_physician, request_lab_test, administer_medication, flag_concern, noop.
-        Always include rationale for escalations -- the physician reads it.
-    """).strip(),
-    "lab": textwrap.dedent("""
-        You are a clinical lab analyst. You see lab values for all 10 patients.
-        You cannot see vitals. You flag critical values to alert the team. Correctly flagging
-        abnormal labs on truly septic patients is rewarded; flagging normal labs is penalised.
-        Respond with ONE JSON object matching LabAction schema.
-        Available ops: release_result, flag_critical, recommend_followup_test, noop.
-    """).strip(),
-    "pharmacist": textwrap.dedent("""
-        You are a clinical pharmacist. You see medications and the antibiogram for all 10 patients.
-        You must flag immunosuppression (masks sepsis signs), recommend empirical antibiotics,
-        and flag interactions. Avoid recommending antibiotics with high resistance rates.
-        Respond with ONE JSON object matching PharmacistAction schema.
-        Available ops: flag_interaction, flag_immunosuppression, recommend_antibiotic, check_dosing, noop.
-    """).strip(),
-    "physician": textwrap.dedent("""
-        You are the attending physician. You see ONLY patients that the nurse, lab, or pharmacist
-        escalated or flagged this tick. Multi-source flags (nurse + lab on same patient) are the strongest
-        signal. Order antibiotics within 1 hour of a valid escalation. Do not order antibiotics on
-        false-alarm patients. Dismissing a multi-source valid escalation is the worst outcome.
-        Respond with ONE JSON object matching PhysicianAction schema.
-        Available ops: order_antibiotics, order_lab_test, admit_to_icu, request_consult, do_nothing.
-    """).strip(),
-}
-
 
 def log(prefix: str, msg: str): print(f"[{prefix}] {msg}", flush=True)
 
@@ -105,7 +70,12 @@ def heuristic_fallback(role: str, obs: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_user_prompt(role: str, obs: Dict[str, Any]) -> str:
-    return f"Current observation (JSON):\n{json.dumps(obs, default=str)[:4000]}\n\nRespond with ONE JSON action."
+    compact_obs = safe_truncate_obs(obs)
+    return (
+        f"Role: {role}\n"
+        f"Current observation (JSON):\n{json.dumps(compact_obs, default=str)[:5000]}\n\n"
+        "Respond with exactly one JSON action."
+    )
 
 
 def parse_action(text: str, role: str, obs: Dict[str, Any]) -> Dict[str, Any]:

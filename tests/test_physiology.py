@@ -22,6 +22,7 @@ def test_sepsis_progression():
     rng = np.random.default_rng(0)
     patients = generate_patients(rng, 5, 1, 0, 96)
     septic = next(p for p in patients if p.infection_present)
+    septic.infection_start_tick = 2
     septic.sepsis_onset_tick = 2
     for tick in range(1, 50):
         advance_physiology(septic, tick, rng)
@@ -35,6 +36,7 @@ def test_antibiotics_stop_progression():
     rng = np.random.default_rng(0)
     patients = generate_patients(rng, 5, 1, 0, 96)
     septic = next(p for p in patients if p.infection_present)
+    septic.infection_start_tick = 2
     septic.sepsis_onset_tick = 2
     for tick in range(1, 10):
         advance_physiology(septic, tick, rng)

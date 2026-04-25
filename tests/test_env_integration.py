@@ -127,6 +127,7 @@ def test_grader_data_populated_after_episode():
     assert "score" in data
     assert "metrics" in data
     assert data["metrics"]["success_threshold"] == 0.70
+    assert "detection_utility" in data["metrics"]
 
 
 def test_observations_serializable():
@@ -135,3 +136,28 @@ def test_observations_serializable():
     bundle = env.reset(seed=42, task_name="task1_textbook")
     json_str = json.dumps(bundle, default=str)
     assert len(json_str) > 100
+
+
+def test_physician_memory_persists_after_escalation():
+    env = SepsisEnvironment()
+    bundle = env.reset(seed=42, task_name="task2_atypical")
+    pid = bundle["observations"]["nurse"]["patient_vitals"][0]["patient_id"]
+    first = env.step({
+        "actions": {
+            "nurse": {"operation": "escalate_to_physician", "patient_id": pid,
+                       "urgency": "critical", "rationale": "test"},
+            "lab": {"operation": "noop"},
+            "pharmacist": {"operation": "noop"},
+            "physician": {"operation": "do_nothing"},
+        }
+    })
+    assert any(s["patient_id"] == pid for s in first["observations"]["physician"]["known_patient_summaries"])
+    second = env.step({
+        "actions": {
+            "nurse": {"operation": "noop"},
+            "lab": {"operation": "noop"},
+            "pharmacist": {"operation": "noop"},
+            "physician": {"operation": "do_nothing"},
+        }
+    })
+    assert any(s["patient_id"] == pid for s in second["observations"]["physician"]["known_patient_summaries"])

@@ -7,7 +7,7 @@ import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Any, Callable, Tuple
+from typing import List, Dict, Any, Callable, Tuple, Optional
 
 import requests
 
@@ -39,6 +39,13 @@ _VALID_KEYS: Dict[str, set] = {
     "lab": {"operation", "patient_id", "test", "reason"},
     "pharmacist": {"operation", "patient_id", "drug", "rationale"},
     "physician": {"operation", "patient_id", "drug", "test", "specialty"},
+}
+
+_OPS_REQUIRING_PATIENT_ID: Dict[str, set] = {
+    "nurse": {"escalate_to_physician", "request_lab_test", "administer_medication", "flag_concern"},
+    "lab": {"release_result", "flag_critical", "recommend_followup_test"},
+    "pharmacist": {"flag_interaction", "flag_immunosuppression", "recommend_antibiotic", "check_dosing"},
+    "physician": {"order_antibiotics", "order_lab_test", "admit_to_icu", "request_consult"},
 }
 
 def _default_op(role: str) -> str:
@@ -81,6 +88,71 @@ def _parse_action(text: str, role: str) -> Dict[str, Any]:
     return {"operation": _default_op(role)}
 
 
+def _extract_observation_from_prompt(prompt: str) -> Dict[str, Any]:
+    marker = "Observation:\n"
+    end_marker = "\nAction (JSON):"
+    if marker not in prompt or end_marker not in prompt:
+        return {}
+    start = prompt.index(marker) + len(marker)
+    end = prompt.rfind(end_marker)
+    raw = prompt[start:end].strip()
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _observation_has_actionable_signal(role: str, obs: Dict[str, Any]) -> bool:
+    if role == "nurse":
+        for p in obs.get("patient_vitals", []):
+            if (
+                p.get("qsofa_score", 0) >= 2
+                or p.get("mean_arterial_pressure", 999) < 65
+                or p.get("systolic_bp", 999) <= 100 and p.get("respiratory_rate", 0) >= 22
+                or p.get("oxygen_saturation", 100) < 93
+                or p.get("mental_status") in ("confused", "unresponsive")
+            ):
+                return True
+        return False
+    if role == "lab":
+        for r in obs.get("lab_results", []):
+            if (
+                (r.get("lactate") is not None and r["lactate"] > 2.2)
+                or (r.get("wbc") is not None and (r["wbc"] > 12 or r["wbc"] < 4))
+                or (r.get("procalcitonin") is not None and r["procalcitonin"] > 0.5)
+                or (r.get("creatinine") is not None and r["creatinine"] > 1.5)
+                or (r.get("platelets") is not None and r["platelets"] < 150)
+                or (r.get("bilirubin_total") is not None and r["bilirubin_total"] > 1.2)
+            ):
+                return True
+        return False
+    if role == "pharmacist":
+        meds = obs.get("patient_medications", [])
+        if any(m.get("immunocompromised") for m in meds):
+            return True
+        if any(f.get("flag_type") == "critical_lab" for f in obs.get("lab_flags_this_tick", [])):
+            return True
+        return False
+    if role == "physician":
+        known = obs.get("known_patient_summaries", [])
+        if any(
+            s.get("qsofa_score", 0) >= 2
+            or s.get("organ_dysfunction_score", 0.0) >= 2.0
+            or len(s.get("flags_raised", [])) >= 2
+            for s in known
+        ):
+            return True
+        return False
+    return False
+
+
+def _noop_reward(role: str, obs: Dict[str, Any]) -> float:
+    if _observation_has_actionable_signal(role, obs):
+        return -0.8
+    return 0.05
+
+
 _ROLE_RE = re.compile(r"Role:\s*(nurse|lab|pharmacist|physician)", re.IGNORECASE)
 
 
@@ -116,16 +188,21 @@ class OnlineSepsisReward:
     def __init__(
         self, env_url: str, task_name: str = "task1_textbook",
         seed: int = 42, warmup_ticks: int = 8, inject_ticks: int = 1,
-        max_workers: int = 4,
+        max_workers: int = 4, verbose: bool = False,
     ) -> None:
         self.env_url = env_url.rstrip("/")
         self.task_name = task_name
         self.seed = seed
         self.warmup_ticks = warmup_ticks
         self.inject_ticks = inject_ticks
+        self.verbose = verbose
         self._baseline_cache: Dict[Tuple[int, str], float] = {}
         self._local = threading.local()
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
+
+    def _log(self, message: str) -> None:
+        if self.verbose:
+            print(message)
 
     def _get_http(self) -> requests.Session:
         if not hasattr(self._local, 'http'):
@@ -177,23 +254,39 @@ class OnlineSepsisReward:
             "physician": physician.decide(observations["physician"]),
         }
 
+    # Role-specific warmup depths.
+    # Physician needs deeper warmup so nurse/lab flags accumulate before it acts.
+    # During physician warmup the physician holds back (do_nothing) so the
+    # escalation queue is still live when the LLM inject tick fires.
+    _ROLE_WARMUP: Dict[str, int] = {
+        "nurse": 2,
+        "lab": 3,
+        "pharmacist": 3,
+        "physician": 5,
+    }
+
     def _run_window(
         self, seed: int, role: str, llm_action: Dict[str, Any] | None,
+        _diag: Dict[str, Any] | None = None,
     ) -> float:
         """Run warmup + injection window, return accumulated role reward."""
+        import traceback
         session_id = uuid.uuid4().hex[:12]
-        # Heuristic policies keep per-episode memory (e.g., recently flagged/escalated).
-        # Use fresh instances per window to prevent cross-window state leakage.
         nurse = HeuristicNurse()
         lab = HeuristicLab()
         pharmacist = HeuristicPharmacist()
         physician = HeuristicPhysician()
+
+        role_warmup = self._ROLE_WARMUP.get(role, self.warmup_ticks)
+
         try:
             bundle = self._reset(seed, session_id)
             done = False
 
-            for _ in range(self.warmup_ticks):
+            warmup_done_early = 0
+            for w in range(role_warmup):
                 if done:
+                    warmup_done_early = w
                     break
                 actions = self._baseline_actions(
                     bundle["observations"],
@@ -202,11 +295,21 @@ class OnlineSepsisReward:
                     pharmacist,
                     physician,
                 )
+                # Physician holds back during its warmup so escalation flags
+                # are still live (untreated) when the LLM inject tick fires.
+                if role == "physician":
+                    actions["physician"] = {"operation": "do_nothing"}
                 bundle = self._step(actions, session_id)
                 done = bundle.get("done", False)
 
+            if _diag is not None:
+                _diag["warmup_done"] = done
+                _diag["warmup_done_early"] = warmup_done_early
+                _diag["tick_after_warmup"] = bundle.get("info", {}).get("tick", "?")
+
             accumulated = 0.0
-            for _ in range(self.inject_ticks):
+            tick_rewards = []
+            for t in range(self.inject_ticks):
                 if done:
                     break
                 actions = self._baseline_actions(
@@ -216,16 +319,31 @@ class OnlineSepsisReward:
                     pharmacist,
                     physician,
                 )
-                if llm_action is not None:
+                # Inject LLM action on tick 0 only — repeating it on subsequent ticks
+                # causes repeat-escalation penalties that collapse the reward signal.
+                if llm_action is not None and t == 0:
                     actions[role] = llm_action
                 bundle = self._step(actions, session_id)
-                accumulated += float(bundle.get("rewards", {}).get(role, 0.0))
+                step_r = float(bundle.get("rewards", {}).get(role, 0.0))
+                tick_rewards.append(step_r)
+                accumulated += step_r
                 done = bundle.get("done", False)
+
+            if _diag is not None:
+                _diag["inject_tick_rewards"] = tick_rewards
+                _diag["accumulated"] = accumulated
+                _diag["inject_done_early"] = done and len(tick_rewards) < self.inject_ticks
 
             return accumulated
         except Exception as exc:
+            tb = traceback.format_exc()
             logger.warning("[OnlineSepsisReward] _run_window failed (seed=%d, role=%s): %s", seed, role, exc)
-            print(f"[REWARD WARN] _run_window failed (seed={seed}, role={role}): {exc}")
+            self._log(f"[REWARD ERR] _run_window EXCEPTION seed={seed} role={role} action={llm_action}")
+            self._log(f"  Error: {exc}")
+            self._log(f"  Traceback:\n{tb}")
+            if _diag is not None:
+                _diag["exception"] = str(exc)
+                _diag["traceback"] = tb
             return 0.0
         finally:
             self._delete_session(session_id)
@@ -240,47 +358,125 @@ class OnlineSepsisReward:
 
     def _eval_single(
         self, idx: int, completion: str, prompt: str,
-    ) -> Tuple[int, float]:
-        """Evaluate one completion, return (index, reward)."""
+    ) -> Tuple[int, float, Dict[str, Any]]:
+        """Evaluate one completion, return (index, reward, diag)."""
         role = _role_from_prompt(prompt)
+        obs = _extract_observation_from_prompt(prompt)
         llm_action = _parse_action(completion, role)
+        is_noop = llm_action.get("operation") in (_default_op(role), "noop")
         has_patient = bool(llm_action.get("patient_id"))
-        has_rationale = bool(
-            llm_action.get("rationale", "").strip().replace("...", "")
-        )
+        needs_patient = llm_action.get("operation") in _OPS_REQUIRING_PATIENT_ID.get(role, set())
+        rationale_val = llm_action.get("rationale") or ""
+        has_rationale = bool(str(rationale_val).strip().replace("...", ""))
 
         seed = int(hashlib.md5(prompt.encode()).hexdigest()[:8], 16) % 100000
-        baseline_r = self._get_baseline(seed, role)
-        llm_r = self._run_window(seed, role, llm_action)
-        advantage = llm_r - baseline_r
 
+        diag: Dict[str, Any] = {
+            "idx": idx, "role": role, "seed": seed,
+            "action": llm_action, "is_noop": is_noop,
+            "completion_len": len(completion.split()),
+        }
+
+        if is_noop:
+            noop_r = _noop_reward(role, obs)
+            diag["path"] = "noop_eval"
+            diag["actionable_signal"] = _observation_has_actionable_signal(role, obs)
+            diag["final_r"] = noop_r
+            return idx, noop_r, diag
+
+        baseline_r = self._get_baseline(seed, role)
+        diag_llm: Dict[str, Any] = {}
+        llm_r = self._run_window(seed, role, llm_action, _diag=diag_llm)
+        advantage = llm_r - baseline_r
         env_r = advantage * 2.0
 
         if not has_rationale and has_patient:
             env_r -= 0.1
+        if needs_patient and not has_patient:
+            env_r -= 0.1
 
-        return idx, max(-1.0, min(1.0, env_r))
+        final_r = max(-1.0, min(1.0, env_r))
+
+        diag.update({
+            "path": "env_eval",
+            "baseline_r": round(baseline_r, 4),
+            "llm_r": round(llm_r, 4),
+            "advantage": round(advantage, 4),
+            "final_r": round(final_r, 4),
+            "inject_tick_rewards": diag_llm.get("inject_tick_rewards", []),
+            "warmup_done_early": diag_llm.get("warmup_done_early", 0),
+            "inject_done_early": diag_llm.get("inject_done_early", False),
+            "tick_after_warmup": diag_llm.get("tick_after_warmup", "?"),
+        })
+
+        return idx, final_r, diag
 
     def __call__(
         self, completions: List[str], prompts: List[str], **kwargs: Any,
     ) -> List[float]:
         rewards = [0.0] * len(completions)
+        diags: List[Dict[str, Any]] = [{}] * len(completions)
 
         futures = [
             self._executor.submit(self._eval_single, i, c, p)
             for i, (c, p) in enumerate(zip(completions, prompts))
         ]
+        errors: List[str] = []
         for future in as_completed(futures):
-            idx, reward = future.result()
-            rewards[idx] = reward
+            try:
+                idx, reward, diag = future.result()
+                rewards[idx] = reward
+                diags[idx] = diag
+            except Exception as exc:
+                errors.append(str(exc))
 
-        # Warn if too many zero rewards — likely server issue or inject timing
-        zero_count = sum(1 for r in rewards if r == 0.0)
-        if zero_count > len(rewards) * 0.7 and len(rewards) > 2:
-            print(f"[REWARD WARN] {zero_count}/{len(rewards)} rewards are 0.0 — "
-                  f"check server health or warmup_ticks setting")
+        if errors:
+            logger.warning("[OnlineSepsisReward] %d futures raised: %s", len(errors), errors[:3])
+
+        if self.verbose:
+            zero_count = sum(1 for r in rewards if r == 0.0)
+            noop_count = sum(1 for d in diags if d.get("is_noop"))
+            env_eval_count = sum(1 for d in diags if d.get("path") == "env_eval")
+            mean_r = sum(rewards) / len(rewards) if rewards else 0.0
+            min_r = min(rewards) if rewards else 0.0
+            max_r = max(rewards) if rewards else 0.0
+            roles = [d.get("role", "?") for d in diags]
+            role_summary = {r: roles.count(r) for r in set(roles)}
+            self._log(
+                f"[REWARD] mean={mean_r:.3f} min={min_r:.3f} max={max_r:.3f} "
+                f"zeros={zero_count}/{len(rewards)} noops={noop_count} "
+                f"env_evals={env_eval_count} roles={role_summary}"
+            )
 
         return rewards
+
+    def preflight_check(self) -> bool:
+        """Verify the reward function is discriminative before training.
+
+        Tests nurse role on seed=1 (known true-sepsis seed) directly via
+        _run_window — bypasses prompt-hash so the seed is predictable.
+        Returns True if reward is discriminative (escalate > noop).
+        """
+        seed = 1
+        role = "nurse"
+        noop_action = {"operation": "noop"}
+        escalate_action = {
+            "operation": "escalate_to_physician",
+            "patient_id": "P01",
+            "urgency": "critical",
+            "rationale": "HR 130 BP 80 temp 39.1",
+        }
+        baseline = self._get_baseline(seed, role)
+        noop_r = self._run_window(seed, role, noop_action)
+        escalate_r = self._run_window(seed, role, escalate_action)
+        noop_adv = round((noop_r - baseline) * 2.0, 4)
+        esc_adv = round((escalate_r - baseline) * 2.0, 4)
+        ok = esc_adv > noop_adv
+        if self.verbose:
+            self._log(
+                f"[PREFLIGHT] baseline={baseline:.4f} noop={noop_adv:.4f} escalate={esc_adv:.4f} ok={ok}"
+            )
+        return ok
 
 
 def format_reward_fn(
@@ -308,6 +504,9 @@ def format_reward_fn(
         score = 0.1
         if parsed.get("patient_id"):
             score += 0.05
+        op = parsed.get("operation")
+        if op in ("noop", "do_nothing"):
+            score -= 0.02
         rationale = parsed.get("rationale", parsed.get("reason", ""))
         if rationale and len(rationale) > 10 and "..." not in rationale:
             score += 0.05
@@ -324,12 +523,13 @@ def make_online_sepsis_reward_fn(
     warmup_ticks: int = 8,
     inject_ticks: int = 1,
     max_workers: int = 4,
+    verbose: bool = False,
 ) -> Callable[[List[str], List[str]], List[float]]:
     """Factory for online, live environment reward shaping used by GRPO."""
     return OnlineSepsisReward(
         env_url=env_url, task_name=task_name, seed=seed,
         warmup_ticks=warmup_ticks, inject_ticks=inject_ticks,
-        max_workers=max_workers,
+        max_workers=max_workers, verbose=verbose,
     )
 
 

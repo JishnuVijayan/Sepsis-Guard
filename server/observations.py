@@ -5,7 +5,14 @@ from models import (
     NurseObservation, LabObservation,
     PharmacistObservation, PhysicianObservation,
 )
-from server.config import ANTIBIOGRAM
+from server.config import ANTIBIOGRAM, CORE_VITAL_FIELDS, LAB_FIELDS
+
+
+def _measurement_age(patient: PatientState, field: str, tick: int) -> Optional[float]:
+    last_tick = patient.last_measured_tick.get(field)
+    if last_tick is None:
+        return None
+    return round((tick - last_tick) / 2.0, 2)
 
 
 def _nurse_patient_view(p: PatientState) -> Dict[str, Any]:
@@ -16,10 +23,14 @@ def _nurse_patient_view(p: PatientState) -> Dict[str, Any]:
         "admission_reason": p.admission_reason,
         "heart_rate": round(p.heart_rate, 1),
         "systolic_bp": round(p.systolic_bp, 1),
+        "mean_arterial_pressure": round(p.mean_arterial_pressure, 1),
+        "diastolic_bp": round(p.diastolic_bp, 1),
         "respiratory_rate": round(p.respiratory_rate, 1),
         "temperature": round(p.temperature, 2),
         "oxygen_saturation": round(p.oxygen_saturation, 1),
         "mental_status": p.mental_status.value,
+        "qsofa_score": p.qsofa_score,
+        "iculos_hours": p.iculos_hours,
         # Fix 3: boolean so nurse knows the physician already acted — she can
         # stop escalating and avoid unnecessary repeat-flag penalties.
         "antibiotics_administered": p.antibiotics_administered is not None,
@@ -27,28 +38,50 @@ def _nurse_patient_view(p: PatientState) -> Dict[str, Any]:
 
 
 def _lab_patient_view(p: PatientState) -> Dict[str, Any]:
+    ages = {
+        field: p.last_measured_tick.get(field)
+        for field in LAB_FIELDS
+        if p.last_measured_tick.get(field) is not None
+    }
     return {
         "patient_id": p.patient_id,
         "lactate": p.lactate,
         "wbc": p.wbc,
         "procalcitonin": p.procalcitonin,
         "creatinine": p.creatinine,
+        "bun": p.bun,
+        "bilirubin_total": p.bilirubin_total,
+        "platelets": p.platelets,
+        "glucose": p.glucose,
+        "hemoglobin": p.hemoglobin,
+        "ptt": p.ptt,
+        "fibrinogen": p.fibrinogen,
+        "bicarbonate": p.bicarbonate,
+        "ph": p.ph,
+        "paco2": p.paco2,
+        "sao2": p.sao2,
+        "base_excess": p.base_excess,
         "blood_culture_result": p.blood_culture_result,
+        "last_measured_tick": ages,
     }
 
 
-def _pharmacist_patient_view(p: PatientState) -> Dict[str, Any]:
+def _pharmacist_patient_view(p: PatientState, tick: int) -> Dict[str, Any]:
     return {
         "patient_id": p.patient_id,
         "age": p.age,
         "current_medications": list(p.current_medications),
         "immunocompromised": p.immunocompromised,
         "antibiotics_administered": p.antibiotics_administered,
+        "iculos_hours": p.iculos_hours,
+        "renal_risk": (p.creatinine or 0.0) > 1.8,
+        "creatinine_age_hours": _measurement_age(p, "creatinine", tick),
     }
 
 
 def _physician_known_patient(
-    p: PatientState, flags_for_patient: List[AgentFlag]
+    p: PatientState, flags_for_patient: List[AgentFlag], tick: int,
+    memory_entry: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     view: Dict[str, Any] = {
         "patient_id": p.patient_id,
@@ -57,6 +90,11 @@ def _physician_known_patient(
         "mental_status": p.mental_status.value,
         "antibiotics_administered": p.antibiotics_administered,
         "icu_admitted": p.icu_admitted,
+        "iculos_hours": p.iculos_hours,
+        "qsofa_score": p.qsofa_score,
+        "organ_dysfunction_score": round(p.organ_dysfunction_score, 2),
+        "first_seen_tick": memory_entry.get("first_seen_tick") if memory_entry else tick,
+        "last_seen_tick": tick,
         "flags_raised": [
             {"source": f.source_role, "type": f.flag_type,
              "urgency": f.urgency, "rationale": f.rationale}
@@ -66,8 +104,17 @@ def _physician_known_patient(
     for f in flags_for_patient:
         if f.source_role == "lab" and f.flag_type == "critical_lab":
             view["lab_snapshot"] = {
-                "lactate": p.lactate, "wbc": p.wbc,
-                "procalcitonin": p.procalcitonin, "creatinine": p.creatinine,
+                "lactate": p.lactate,
+                "wbc": p.wbc,
+                "procalcitonin": p.procalcitonin,
+                "creatinine": p.creatinine,
+                "bun": p.bun,
+                "platelets": p.platelets,
+                "bilirubin_total": p.bilirubin_total,
+                "age_hours": {
+                    field: _measurement_age(p, field, tick)
+                    for field in ("lactate", "wbc", "procalcitonin", "creatinine", "platelets", "bilirubin_total")
+                },
             }
     nurse_escalated = any(
         f.source_role == "nurse" and f.flag_type == "escalation"
@@ -77,10 +124,13 @@ def _physician_known_patient(
         view["vitals_at_escalation"] = {
             "heart_rate": round(p.heart_rate, 1),
             "systolic_bp": round(p.systolic_bp, 1),
+            "mean_arterial_pressure": round(p.mean_arterial_pressure, 1),
             "respiratory_rate": round(p.respiratory_rate, 1),
             "temperature": round(p.temperature, 2),
             "oxygen_saturation": round(p.oxygen_saturation, 1),
         }
+    if memory_entry and memory_entry.get("flag_history"):
+        view["flag_history"] = list(memory_entry["flag_history"])
     return view
 
 
@@ -96,6 +146,7 @@ def build_observations(
     last_results: Dict[str, Optional[str]],
     pending_labs_summary: List[Dict[str, Any]],
     full_info_sharing: bool = False,
+    physician_memory: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     by_patient: Dict[str, List[AgentFlag]] = {}
     for f in active_flags_this_tick:
@@ -134,7 +185,7 @@ def build_observations(
     pharmacist_obs = PharmacistObservation(
         done=False, reward=0.0,
         tick=tick, max_ticks=max_ticks, task_name=task_name,
-        patient_medications=[_pharmacist_patient_view(p) for p in patients],
+        patient_medications=[_pharmacist_patient_view(p, tick) for p in patients],
         antibiogram=dict(ANTIBIOGRAM),
         lab_flags_this_tick=[
             f for f in active_flags_this_tick if f.source_role == "lab"
@@ -143,16 +194,24 @@ def build_observations(
         cumulative_reward=cumulative_rewards.get("pharmacist", 0.0),
     )
 
+    physician_memory = physician_memory or {}
     escalated_patient_ids = {f.patient_id for f in active_flags_this_tick}
+    known_patient_ids = escalated_patient_ids | set(physician_memory.keys())
     known_summaries = [
-        _physician_known_patient(p, by_patient.get(p.patient_id, []))
-        for p in patients if full_info_sharing or p.patient_id in escalated_patient_ids
+        _physician_known_patient(
+            p,
+            by_patient.get(p.patient_id, []),
+            tick,
+            physician_memory.get(p.patient_id),
+        )
+        for p in patients if full_info_sharing or p.patient_id in known_patient_ids
     ]
     if full_info_sharing:
         for p, summary in zip(patients, known_summaries):
             summary.setdefault("vitals_snapshot", {
                 "heart_rate": round(p.heart_rate, 1),
                 "systolic_bp": round(p.systolic_bp, 1),
+                "mean_arterial_pressure": round(p.mean_arterial_pressure, 1),
                 "respiratory_rate": round(p.respiratory_rate, 1),
                 "temperature": round(p.temperature, 2),
                 "oxygen_saturation": round(p.oxygen_saturation, 1),

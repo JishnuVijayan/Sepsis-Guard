@@ -6,7 +6,7 @@ from models import (
     NurseAction, LabAction, PharmacistAction, PhysicianAction,
 )
 from server.physiology import order_lab_test
-from server.config import VALID_ANTIBIOTICS, ANTIBIOGRAM
+from server.config import VALID_ANTIBIOTICS, ANTIBIOGRAM, DEFAULT_TEST_DELAYS
 
 
 def _find_patient(patients: List[PatientState], patient_id: str) -> PatientState | None:
@@ -14,6 +14,23 @@ def _find_patient(patients: List[PatientState], patient_id: str) -> PatientState
         if p.patient_id == patient_id:
             return p
     return None
+
+
+def _mark_detection(patient: PatientState, tick: int) -> None:
+    if patient.first_detection_tick is None:
+        patient.first_detection_tick = tick
+
+
+def _record_false_alert(patient: PatientState) -> None:
+    if not patient.infection_present:
+        patient.false_alert_count += 1
+
+
+def _recommendation_score(patient: PatientState, drug: str) -> float:
+    resistance = ANTIBIOGRAM.get(drug, 0.5)
+    renal_penalty = 0.08 if (patient.creatinine or 0.0) > 1.8 and drug == "vancomycin" else 0.0
+    escalation_bonus = 0.06 if patient.first_critical_lab_tick is not None else 0.0
+    return round(max(0.0, 1.0 - resistance - renal_penalty + escalation_bonus), 4)
 
 
 def apply_lab_action(
@@ -26,6 +43,10 @@ def apply_lab_action(
         p = _find_patient(patients, action.patient_id)
         if p is None:
             return flags, f"Lab: unknown patient {action.patient_id}"
+        if p.first_critical_lab_tick is None:
+            p.first_critical_lab_tick = tick
+        _mark_detection(p, tick)
+        _record_false_alert(p)
         flags.append(AgentFlag(
             source_role="lab", patient_id=p.patient_id, flag_type="critical_lab",
             urgency="urgent", rationale=action.reason or "critical lab value", tick=tick,
@@ -35,6 +56,9 @@ def apply_lab_action(
         p = _find_patient(patients, action.patient_id)
         if p is None:
             return flags, "Lab: unknown patient"
+        if action.test:
+            delay = DEFAULT_TEST_DELAYS.get(action.test, 1)
+            order_lab_test(p, action.test, tick, delay)
         flags.append(AgentFlag(
             source_role="lab", patient_id=p.patient_id, flag_type="followup_recommended",
             urgency="routine", rationale=action.reason, tick=tick,
@@ -61,6 +85,8 @@ def apply_pharmacist_action(
         p = _find_patient(patients, action.patient_id)
         if p is None:
             return flags, "Pharmacist: unknown patient"
+        if p.first_immunosuppression_flag_tick is None:
+            p.first_immunosuppression_flag_tick = tick
         flags.append(AgentFlag(
             source_role="pharmacist", patient_id=p.patient_id,
             flag_type="immunosuppression", urgency="urgent",
@@ -71,6 +97,13 @@ def apply_pharmacist_action(
         p = _find_patient(patients, action.patient_id)
         if p is None:
             return flags, "Pharmacist: unknown patient"
+        if action.drug in ANTIBIOGRAM:
+            score = _recommendation_score(p, action.drug)
+            if score > p.best_antibiotic_recommendation_score:
+                p.best_antibiotic_recommendation_score = score
+                p.best_antibiotic_recommendation = action.drug
+            if p.first_antibiotic_recommendation_tick is None:
+                p.first_antibiotic_recommendation_tick = tick
         flags.append(AgentFlag(
             source_role="pharmacist", patient_id=p.patient_id,
             flag_type="antibiotic_recommendation", urgency="routine",
@@ -89,6 +122,11 @@ def apply_nurse_action(
         if p is None:
             return flags, "Nurse: unknown patient"
         urgency = action.urgency or "routine"
+        if p.first_escalation_tick is None:
+            p.first_escalation_tick = tick
+        if urgency in ("urgent", "critical"):
+            _mark_detection(p, tick)
+            _record_false_alert(p)
         flags.append(AgentFlag(
             source_role="nurse", patient_id=p.patient_id, flag_type="escalation",
             urgency=urgency, rationale=action.rationale, tick=tick,
@@ -127,6 +165,8 @@ def apply_physician_action(
         p = _find_patient(patients, action.patient_id)
         if p is None or action.drug not in VALID_ANTIBIOTICS:
             return "Physician: invalid antibiotic order", meta
+        if p.first_physician_review_tick is None:
+            p.first_physician_review_tick = tick
         # Fix 2: evaluate correctness regardless of trust so GRPO gets a reward
         # signal even in low-trust states. The antibiotic is only administered
         # when trust is sufficient — but the decision quality is always scored.
@@ -134,27 +174,37 @@ def apply_physician_action(
         for f in active_flags:
             if f.patient_id == action.patient_id and f.flag_type in ("escalation", "critical_lab"):
                 meta["on_valid_escalation"] = True
-        if p.is_false_alarm_patient:
+        if not p.infection_present:
             meta["on_false_alarm"] = True
+            _record_false_alert(p)
+        _mark_detection(p, tick)
         if physician_trust < 0.4:
             meta["trust_penalised"] = True
             return "Physician order delayed (low trust — decision logged)", meta
         if p.antibiotics_administered is None:
             p.antibiotics_administered = action.drug
             p.antibiotic_tick = tick
+            p.first_antibiotic_tick = tick
         return f"Physician ordered {action.drug} for {p.patient_id}", meta
     if action.operation == "admit_to_icu":
         p = _find_patient(patients, action.patient_id)
         if p is None:
             return "Physician: unknown patient", meta
         p.icu_admitted = True
+        if p.first_physician_review_tick is None:
+            p.first_physician_review_tick = tick
+        if p.first_icu_tick is None:
+            p.first_icu_tick = tick
         meta["icu_ordered"] = True
         return f"Physician admitted {p.patient_id} to ICU", meta
     if action.operation == "order_lab_test":
         p = _find_patient(patients, action.patient_id)
         if p is None or action.test is None:
             return "Physician: bad lab request", meta
-        order_lab_test(p, action.test, tick, lab_delay)
+        delay = max(lab_delay, DEFAULT_TEST_DELAYS.get(action.test, lab_delay))
+        if p.first_physician_review_tick is None:
+            p.first_physician_review_tick = tick
+        order_lab_test(p, action.test, tick, delay)
         return f"Physician ordered {action.test} for {p.patient_id}", meta
     return "Physician did nothing", meta
 
