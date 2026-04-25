@@ -99,6 +99,9 @@ def compute_lab_reward(
         for p in patients:
             if p.patient_id in lab_flagged_pids:
                 continue
+            # Skip penalty if lab already flagged this patient in a prior tick
+            if (prior_flag_counts or {}).get((p.patient_id, "lab"), 0) > 0:
+                continue
             has_critical = any([
                 p.lactate is not None and p.lactate > 2.0,
                 p.wbc is not None and (p.wbc > 12 or p.wbc < 4),
@@ -157,6 +160,9 @@ def compute_pharmacist_reward(
                 if f.source_role == "pharmacist" and f.flag_type == "immunosuppression"
             }
         for p in patients:
+            # Skip penalty if pharmacist already flagged this patient in a prior tick
+            if (prior_flag_counts or {}).get((p.patient_id, "pharmacist"), 0) > 0:
+                continue
             if p.immunocompromised and p.patient_id not in pharma_flagged_pids:
                 r -= 1.0
     return r
