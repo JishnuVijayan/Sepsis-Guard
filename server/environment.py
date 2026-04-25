@@ -142,6 +142,9 @@ class SepsisEnvironment(Environment):
         )
         self._active_flags = new_flags
         self._last_results = results
+        # Reward shaping should score against prior history, not counts updated
+        # by flags generated on the current tick.
+        prev_flag_counts = dict(self._flag_counts)
 
         for f in new_flags:
             key = (f.patient_id, f.source_role)
@@ -157,9 +160,9 @@ class SepsisEnvironment(Environment):
                     self._coord_events["total"] + 1,
                 )
 
-        r_nurse = compute_nurse_reward(request.nurse, self._patients, new_flags, self._flag_counts)
-        r_lab = compute_lab_reward(request.lab, self._patients, new_flags, self._flag_counts)
-        r_pharm = compute_pharmacist_reward(request.pharmacist, self._patients, new_flags, self._flag_counts)
+        r_nurse = compute_nurse_reward(request.nurse, self._patients, new_flags, prev_flag_counts)
+        r_lab = compute_lab_reward(request.lab, self._patients, new_flags, prev_flag_counts)
+        r_pharm = compute_pharmacist_reward(request.pharmacist, self._patients, new_flags, prev_flag_counts)
         r_phys = compute_physician_reward(
             request.physician, self._patients, self._tick, phys_meta, new_flags,
         )

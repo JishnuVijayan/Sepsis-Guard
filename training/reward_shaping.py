@@ -45,6 +45,19 @@ def _default_op(role: str) -> str:
     return "do_nothing" if role == "physician" else "noop"
 
 
+def _normalize_nurse_urgency(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {"routine", "urgent", "critical"}:
+        return normalized
+    if normalized in {"low", "medium"}:
+        return "routine"
+    if normalized in {"high", "emergent"}:
+        return "urgent"
+    return None
+
+
 def _sanitize_action(parsed: Dict[str, Any], role: str) -> Dict[str, Any]:
     """Ensure the action is valid for the role. Fix common LLM mistakes."""
     op = parsed.get("operation", "")
@@ -59,7 +72,21 @@ def _sanitize_action(parsed: Dict[str, Any], role: str) -> Dict[str, Any]:
     parsed["operation"] = op
     # Strip keys that Pydantic would reject for this role
     valid_keys = _VALID_KEYS.get(role, set())
-    return {k: v for k, v in parsed.items() if k in valid_keys}
+    sanitized = {k: v for k, v in parsed.items() if k in valid_keys}
+
+    # Normalize patient id to the API's expected string type.
+    if "patient_id" in sanitized and sanitized["patient_id"] is not None:
+        sanitized["patient_id"] = str(sanitized["patient_id"]).strip()
+
+    # Map LLM urgency aliases (e.g. "high") to valid schema values.
+    if role == "nurse":
+        if sanitized.get("operation") == "escalate_to_physician":
+            normalized_urgency = _normalize_nurse_urgency(sanitized.get("urgency"))
+            sanitized["urgency"] = normalized_urgency or "urgent"
+        else:
+            sanitized.pop("urgency", None)
+
+    return sanitized
 
 
 def _parse_action(text: str, role: str) -> Dict[str, Any]:
@@ -206,7 +233,7 @@ class OnlineSepsisReward:
                 done = bundle.get("done", False)
 
             accumulated = 0.0
-            for _ in range(self.inject_ticks):
+            for tick_idx in range(self.inject_ticks):
                 if done:
                     break
                 actions = self._baseline_actions(
@@ -216,7 +243,9 @@ class OnlineSepsisReward:
                     pharmacist,
                     physician,
                 )
-                if llm_action is not None:
+                # Inject once per window; repeatedly forcing the same action can
+                # create artificial repeat-action penalties and collapse rewards.
+                if llm_action is not None and tick_idx == 0:
                     actions[role] = llm_action
                 bundle = self._step(actions, session_id)
                 accumulated += float(bundle.get("rewards", {}).get(role, 0.0))
