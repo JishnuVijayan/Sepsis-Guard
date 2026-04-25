@@ -37,15 +37,17 @@ def compute_nurse_reward(
             r += 0.5
         if prior_flag_counts.get(action.patient_id, 0) >= 5:
             r -= 0.2
-    nurse_patients_escalated = {
+    nurse_patients_flagged = {
         f.patient_id for f in flags_this_tick
-        if f.source_role == "nurse" and f.flag_type == "escalation"
+        if f.source_role == "nurse" and f.flag_type in ("escalation", "concern")
     }
     for p in patients:
-        if (_patient_has_active_sepsis(p) and p.infection_severity > 0.8
-                and p.patient_id not in nurse_patients_escalated
-                and p.antibiotics_administered is None):
-            r -= 2.0
+        if (_patient_has_active_sepsis(p) and p.antibiotics_administered is None
+                and p.patient_id not in nurse_patients_flagged):
+            if p.infection_severity > 0.8:
+                r -= 2.0
+            elif p.infection_severity > 0.5:
+                r -= 1.0
     return r
 
 
@@ -80,6 +82,21 @@ def compute_lab_reward(
             r += 0.4
         else:
             r -= 0.2
+    elif action.operation == "noop":
+        lab_flagged_pids = {
+            f.patient_id for f in flags_this_tick
+            if f.source_role == "lab" and f.flag_type == "critical_lab"
+        }
+        for p in patients:
+            if p.patient_id in lab_flagged_pids:
+                continue
+            has_critical = any([
+                p.lactate is not None and p.lactate > 2.0,
+                p.wbc is not None and (p.wbc > 12 or p.wbc < 4),
+                p.procalcitonin is not None and p.procalcitonin > 0.5,
+            ])
+            if has_critical and _patient_truly_sepsis(p):
+                r -= 1.5
     return r
 
 
@@ -122,6 +139,16 @@ def compute_pharmacist_reward(
             r += 0.3
         else:
             r -= 0.1
+    elif action.operation == "noop":
+        pharma_flagged_pids = set()
+        if active_flags:
+            pharma_flagged_pids = {
+                f.patient_id for f in active_flags
+                if f.source_role == "pharmacist" and f.flag_type == "immunosuppression"
+            }
+        for p in patients:
+            if p.immunocompromised and p.patient_id not in pharma_flagged_pids:
+                r -= 1.0
     return r
 
 

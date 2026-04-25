@@ -175,17 +175,10 @@ class OnlineSepsisReward:
         """Evaluate one completion, return (index, reward)."""
         role = _role_from_prompt(prompt)
         llm_action = _parse_action(completion, role)
-        is_noop = llm_action.get("operation") in ("noop", "do_nothing")
         has_patient = bool(llm_action.get("patient_id"))
         has_rationale = bool(
             llm_action.get("rationale", "").strip().replace("...", "")
         )
-
-        if is_noop:
-            return idx, -0.3
-
-        if not has_patient:
-            return idx, -0.2
 
         seed = self.seed + idx
         baseline_r = self._get_baseline(seed, role)
@@ -194,7 +187,7 @@ class OnlineSepsisReward:
 
         env_r = advantage * 2.0
 
-        if not has_rationale:
+        if not has_rationale and has_patient:
             env_r -= 0.1
 
         return idx, max(-1.0, min(1.0, env_r))
