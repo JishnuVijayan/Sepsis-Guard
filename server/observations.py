@@ -20,6 +20,9 @@ def _nurse_patient_view(p: PatientState) -> Dict[str, Any]:
         "temperature": round(p.temperature, 2),
         "oxygen_saturation": round(p.oxygen_saturation, 1),
         "mental_status": p.mental_status.value,
+        # Fix 3: boolean so nurse knows the physician already acted — she can
+        # stop escalating and avoid unnecessary repeat-flag penalties.
+        "antibiotics_administered": p.antibiotics_administered is not None,
     }
 
 

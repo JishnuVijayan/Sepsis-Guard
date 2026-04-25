@@ -77,7 +77,7 @@ class OnlineSepsisReward:
 
     def __init__(
         self, env_url: str, task_name: str = "task1_textbook",
-        seed: int = 42, warmup_ticks: int = 4, inject_ticks: int = 1,
+        seed: int = 42, warmup_ticks: int = 4, inject_ticks: int = 4,
         max_workers: int = 4,
     ) -> None:
         self.env_url = env_url.rstrip("/")
@@ -255,7 +255,7 @@ def make_online_sepsis_reward_fn(
     task_name: str = "task1_textbook",
     seed: int = 42,
     warmup_ticks: int = 4,
-    inject_ticks: int = 1,
+    inject_ticks: int = 4,
     max_workers: int = 4,
 ) -> Callable[[List[str], List[str]], List[float]]:
     """Factory for online, live environment reward shaping used by GRPO."""

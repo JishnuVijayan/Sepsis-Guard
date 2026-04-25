@@ -64,7 +64,7 @@ class SepsisEnvironment(Environment):
         self._total_escalations: int = 0
         self._total_false_escalations: int = 0
         self._coord_events: Dict[str, int] = {"total": 0, "max_possible": 1}
-        self._flag_counts: Dict[str, int] = {}
+        self._flag_counts: Dict[tuple, int] = {}
         self._prev_lives_metrics: Dict[str, int] = {"lives_saved": 0, "lives_lost": 0}
         self._last_grader_data: Dict[str, Any] = {}
 
@@ -144,7 +144,8 @@ class SepsisEnvironment(Environment):
         self._last_results = results
 
         for f in new_flags:
-            self._flag_counts[f.patient_id] = self._flag_counts.get(f.patient_id, 0) + 1
+            key = (f.patient_id, f.source_role)
+            self._flag_counts[key] = self._flag_counts.get(key, 0) + 1
 
         flagged_by_source: Dict[str, set] = {}
         for f in new_flags:

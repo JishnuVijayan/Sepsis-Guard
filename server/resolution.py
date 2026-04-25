@@ -121,22 +121,27 @@ def apply_physician_action(
         "icu_ordered": False,
         "on_valid_escalation": False,
         "on_false_alarm": False,
+        "trust_penalised": False,
     }
     if action.operation == "order_antibiotics":
         p = _find_patient(patients, action.patient_id)
         if p is None or action.drug not in VALID_ANTIBIOTICS:
             return "Physician: invalid antibiotic order", meta
+        # Fix 2: evaluate correctness regardless of trust so GRPO gets a reward
+        # signal even in low-trust states. The antibiotic is only administered
+        # when trust is sufficient — but the decision quality is always scored.
+        meta["antibiotics_ordered"] = True
+        for f in active_flags:
+            if f.patient_id == action.patient_id and f.flag_type in ("escalation", "critical_lab"):
+                meta["on_valid_escalation"] = True
+        if p.is_false_alarm_patient:
+            meta["on_false_alarm"] = True
         if physician_trust < 0.4:
-            return "Physician order delayed (low trust)", meta
+            meta["trust_penalised"] = True
+            return "Physician order delayed (low trust — decision logged)", meta
         if p.antibiotics_administered is None:
             p.antibiotics_administered = action.drug
             p.antibiotic_tick = tick
-            meta["antibiotics_ordered"] = True
-            for f in active_flags:
-                if f.patient_id == p.patient_id and f.flag_type in ("escalation", "critical_lab"):
-                    meta["on_valid_escalation"] = True
-            if p.is_false_alarm_patient:
-                meta["on_false_alarm"] = True
         return f"Physician ordered {action.drug} for {p.patient_id}", meta
     if action.operation == "admit_to_icu":
         p = _find_patient(patients, action.patient_id)
