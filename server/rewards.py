@@ -25,8 +25,14 @@ def compute_nurse_reward(
     if action.operation == "escalate_to_physician" and action.patient_id:
         p = next((p for p in patients if p.patient_id == action.patient_id), None)
         if p is None: return -0.2
+        prior = prior_flag_counts.get(action.patient_id, 0)
         if _patient_truly_sepsis(p) and p.infection_severity > 0.4:
-            r += 1.5
+            if prior == 0:
+                r += 1.5
+            elif prior < 3:
+                r += 0.3
+            else:
+                r -= 0.1
         elif p.is_false_alarm_patient or not p.infection_present:
             r -= 1.0
         else:
@@ -184,7 +190,8 @@ def compute_physician_reward(
     if action.operation == "do_nothing":
         valid_escalation_patients = set()
         for f in active_flags:
-            if f.flag_type == "escalation" and f.urgency in ("urgent", "critical"):
+            if (f.flag_type == "escalation" and f.urgency in ("urgent", "critical")) \
+                    or f.flag_type in ("critical_lab", "immunosuppression"):
                 valid_escalation_patients.add(f.patient_id)
         for pid in valid_escalation_patients:
             p = next((p for p in patients if p.patient_id == pid), None)
@@ -235,13 +242,15 @@ def compute_terminal_team_score(
     coord_events = coordination_events.get("total", 0)
     coord_max = max(1, coordination_events.get("max_possible", 1))
     coord_score = min(1.0, coord_events / coord_max)
-    avg_time_to_abx = 0.0
     treated = [p for p in sepsis_patients if p.antibiotics_administered is not None]
     if treated:
         avg_time_to_abx = sum(
             (p.antibiotic_tick - p.sepsis_onset_tick) / 2.0 for p in treated
         ) / len(treated)
-    time_efficiency = max(0.0, 1.0 - avg_time_to_abx / 6.0)
+        time_efficiency = max(0.0, 1.0 - avg_time_to_abx / 6.0)
+    else:
+        avg_time_to_abx = 0.0
+        time_efficiency = 0.0
 
     score = (
         0.40 * (treated_in_time / n_sepsis)
