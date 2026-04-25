@@ -19,13 +19,15 @@ def _patient_truly_sepsis(p: PatientState) -> bool:
 
 def compute_nurse_reward(
     action: NurseAction, patients: List[PatientState], flags_this_tick: List[AgentFlag],
-    prior_flag_counts: Dict[str, int],
+    prior_flag_counts: Dict[tuple, int],
 ) -> float:
     r = 0.0
     if action.operation == "escalate_to_physician" and action.patient_id:
         p = next((p for p in patients if p.patient_id == action.patient_id), None)
         if p is None: return -0.2
-        prior = prior_flag_counts.get(action.patient_id, 0)
+        # Fix 1: key by (patient_id, role) so lab/pharmacist flags don't
+        # contaminate the nurse's repeat-escalation counter.
+        prior = prior_flag_counts.get((action.patient_id, "nurse"), 0)
         if _patient_truly_sepsis(p) and p.infection_severity > 0.4:
             if prior == 0:
                 r += 1.5
@@ -41,7 +43,7 @@ def compute_nurse_reward(
         p = next((p for p in patients if p.patient_id == action.patient_id), None)
         if p and _patient_truly_sepsis(p):
             r += 0.5
-        if prior_flag_counts.get(action.patient_id, 0) >= 5:
+        if prior_flag_counts.get((action.patient_id, "nurse"), 0) >= 5:
             r -= 0.2
     nurse_patients_flagged = {
         f.patient_id for f in flags_this_tick
@@ -59,7 +61,7 @@ def compute_nurse_reward(
 
 def compute_lab_reward(
     action: LabAction, patients: List[PatientState], flags_this_tick: List[AgentFlag],
-    prior_flag_counts: Dict[str, int] | None = None,
+    prior_flag_counts: Dict[tuple, int] | None = None,
 ) -> float:
     r = 0.0
     if action.operation == "flag_critical" and action.patient_id:
@@ -71,7 +73,8 @@ def compute_lab_reward(
             p.procalcitonin is not None and p.procalcitonin > 0.5,
         ])
         if abnormal_lab and _patient_truly_sepsis(p):
-            prior = (prior_flag_counts or {}).get(action.patient_id, 0)
+            # Fix 1: use role-specific key
+            prior = (prior_flag_counts or {}).get((action.patient_id, "lab"), 0)
             if prior == 0:
                 r += 1.2
             elif prior < 3:
@@ -109,10 +112,11 @@ def compute_lab_reward(
 def compute_pharmacist_reward(
     action: PharmacistAction, patients: List[PatientState],
     active_flags: List[AgentFlag] | None = None,
-    prior_flag_counts: Dict[str, int] | None = None,
+    prior_flag_counts: Dict[tuple, int] | None = None,
 ) -> float:
     r = 0.0
-    prior = (prior_flag_counts or {}).get(action.patient_id or "", 0) if action.patient_id else 0
+    # Fix 1: use role-specific key for pharmacist repeat-flag counter
+    prior = (prior_flag_counts or {}).get((action.patient_id, "pharmacist"), 0) if action.patient_id else 0
     if action.operation == "flag_immunosuppression" and action.patient_id:
         p = next((p for p in patients if p.patient_id == action.patient_id), None)
         if p and p.immunocompromised:
@@ -179,6 +183,10 @@ def compute_physician_reward(
                     r += 1.0
             else:
                 r += 0.5
+            # Fix 2: scale down (but don't zero) the reward when trust is low.
+            # The decision was still correct — GRPO needs that signal.
+            if phys_meta.get("trust_penalised"):
+                r *= 0.5
         else:
             r += 0.2
     if phys_meta.get("icu_ordered"):

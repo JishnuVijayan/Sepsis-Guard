@@ -64,12 +64,21 @@ def test_physician_order_without_escalation_not_counted_valid():
 
 
 def test_low_trust_delays_physician():
+    """Low trust: decision is still evaluated for reward (antibiotics_ordered=True,
+    trust_penalised=True) but the antibiotic is NOT actually administered to the
+    patient, so GRPO gets a gradient signal without bypassing the trust mechanic."""
     rng = np.random.default_rng(0)
     patients = generate_patients(rng, 5, 1, 0, 48)
+    patient_id = patients[0].patient_id
     req = _bundle(physician=PhysicianAction(
-        operation="order_antibiotics", patient_id=patients[0].patient_id,
+        operation="order_antibiotics", patient_id=patient_id,
         drug="meropenem",
     ))
     flags, results, meta = resolve_step(req, patients, tick=1, lab_delay=1, physician_trust=0.3)
-    assert meta["antibiotics_ordered"] is False
+    # Decision quality is scored so GRPO gets a signal even in low-trust states.
+    assert meta["antibiotics_ordered"] is True
+    assert meta["trust_penalised"] is True
+    # But the antibiotic must NOT actually be administered to the patient.
+    p = next(p for p in patients if p.patient_id == patient_id)
+    assert p.antibiotics_administered is None
     assert "delayed" in results["physician"].lower()
