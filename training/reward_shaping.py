@@ -18,6 +18,7 @@ from agents.lab import HeuristicLab
 from agents.pharmacist import HeuristicPharmacist
 from agents.physician import HeuristicPhysician
 
+FORMAT_REWARD_SCALE = 0.25
 
 def is_valid_action_json(text: str) -> bool:
     try:
@@ -315,7 +316,10 @@ class OnlineSepsisReward:
 def format_reward_fn(
     completions: List[str], prompts: List[str], **kwargs: Any,
 ) -> List[float]:
-    """Reward for valid JSON action format — scaled to not dominate env reward."""
+    """Reward for valid JSON action format.
+
+    Intentionally down-weighted to avoid overpowering environment reward.
+    """
     rewards = []
     for c in completions:
         stripped = c.strip()
@@ -337,12 +341,16 @@ def format_reward_fn(
         score = 0.1
         if parsed.get("patient_id"):
             score += 0.05
+        op = str(parsed.get("operation", "")).strip().lower()
+        if op in {"noop", "do_nothing"}:
+            # Prevent convergence to always-noop policies that exploit format reward.
+            score -= 0.08
         rationale = parsed.get("rationale", parsed.get("reason", ""))
         if rationale and len(rationale) > 10 and "..." not in rationale:
             score += 0.05
         elif rationale and ("..." in rationale or len(rationale) <= 3):
             score -= 0.1
-        rewards.append(score)
+        rewards.append(score * FORMAT_REWARD_SCALE)
     return rewards
 
 

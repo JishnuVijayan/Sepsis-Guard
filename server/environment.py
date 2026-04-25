@@ -64,6 +64,7 @@ class SepsisEnvironment(Environment):
         self._total_escalations: int = 0
         self._total_false_escalations: int = 0
         self._coord_events: Dict[str, int] = {"total": 0, "max_possible": 1}
+        self._coordinated_patient_ids: set[str] = set()
         self._flag_counts: Dict[tuple, int] = {}
         self._prev_lives_metrics: Dict[str, int] = {"lives_saved": 0, "lives_lost": 0}
         self._last_grader_data: Dict[str, Any] = {}
@@ -105,6 +106,7 @@ class SepsisEnvironment(Environment):
         self._coord_events = {
             "total": 0, "max_possible": max(2, 2 * self._task_cfg["n_sepsis_cases"]),
         }
+        self._coordinated_patient_ids = set()
         self._flag_counts = {}
         self._prev_lives_metrics = {"lives_saved": 0, "lives_lost": 0}
 
@@ -154,7 +156,16 @@ class SepsisEnvironment(Environment):
         for f in new_flags:
             flagged_by_source.setdefault(f.patient_id, set()).add(f.source_role)
         for pid, sources in flagged_by_source.items():
-            if len(sources) >= 2:
+            patient = next((p for p in self._patients if p.patient_id == pid), None)
+            # Count a coordination event once per truly septic patient to avoid
+            # farming this metric via repeated multi-source flags on false alarms.
+            if (
+                len(sources) >= 2
+                and patient is not None
+                and patient.infection_present
+                and pid not in self._coordinated_patient_ids
+            ):
+                self._coordinated_patient_ids.add(pid)
                 self._coord_events["total"] = min(
                     self._coord_events["max_possible"],
                     self._coord_events["total"] + 1,
