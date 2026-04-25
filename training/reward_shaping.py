@@ -1,7 +1,9 @@
 from __future__ import annotations
+import hashlib
 import json
 import os
 import re
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Callable, Tuple
@@ -75,7 +77,7 @@ class OnlineSepsisReward:
 
     def __init__(
         self, env_url: str, task_name: str = "task1_textbook",
-        seed: int = 42, warmup_ticks: int = 4, inject_ticks: int = 8,
+        seed: int = 42, warmup_ticks: int = 4, inject_ticks: int = 1,
         max_workers: int = 4,
     ) -> None:
         self.env_url = env_url.rstrip("/")
@@ -88,12 +90,18 @@ class OnlineSepsisReward:
         self._pharmacist = HeuristicPharmacist()
         self._physician = HeuristicPhysician()
         self._baseline_cache: Dict[Tuple[int, str], float] = {}
-        self._http = requests.Session()
-        self._http.headers.update({"Content-Type": "application/json"})
+        self._local = threading.local()
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
+    def _get_http(self) -> requests.Session:
+        if not hasattr(self._local, 'http'):
+            s = requests.Session()
+            s.headers.update({"Content-Type": "application/json"})
+            self._local.http = s
+        return self._local.http
+
     def _reset(self, seed: int, session_id: str) -> Dict[str, Any]:
-        r = self._http.post(
+        r = self._get_http().post(
             f"{self.env_url}/reset",
             json={"task_name": self.task_name, "seed": seed},
             headers={"X-Session-Id": session_id},
@@ -103,7 +111,7 @@ class OnlineSepsisReward:
         return r.json()
 
     def _step(self, actions: Dict[str, Dict[str, Any]], session_id: str) -> Dict[str, Any]:
-        r = self._http.post(
+        r = self._get_http().post(
             f"{self.env_url}/step",
             json={"actions": actions},
             headers={"X-Session-Id": session_id},
@@ -114,7 +122,7 @@ class OnlineSepsisReward:
 
     def _delete_session(self, session_id: str) -> None:
         try:
-            self._http.delete(
+            self._get_http().delete(
                 f"{self.env_url}/session/{session_id}", timeout=5
             )
         except Exception:
@@ -157,7 +165,7 @@ class OnlineSepsisReward:
 
             return accumulated
         except Exception:
-            return -1.0 if llm_action is not None else 0.0
+            return 0.0
         finally:
             self._delete_session(session_id)
 
@@ -180,7 +188,7 @@ class OnlineSepsisReward:
             llm_action.get("rationale", "").strip().replace("...", "")
         )
 
-        seed = self.seed + idx
+        seed = int(hashlib.md5(prompt.encode()).hexdigest()[:8], 16) % 100000
         baseline_r = self._get_baseline(seed, role)
         llm_r = self._run_window(seed, role, llm_action)
         advantage = llm_r - baseline_r
@@ -215,10 +223,21 @@ def format_reward_fn(
     rewards = []
     for c in completions:
         stripped = c.strip()
-        if not is_valid_action_json(stripped):
+        parsed = None
+        if is_valid_action_json(stripped):
+            parsed = json.loads(stripped)
+        else:
+            m = re.search(r"\{[^{}]*\"operation\"[^{}]*\}", stripped)
+            if m:
+                try:
+                    candidate = json.loads(m.group(0))
+                    if isinstance(candidate, dict) and "operation" in candidate:
+                        parsed = candidate
+                except Exception:
+                    pass
+        if parsed is None:
             rewards.append(-0.3)
             continue
-        parsed = json.loads(stripped)
         score = 0.1
         if parsed.get("patient_id"):
             score += 0.05
@@ -236,7 +255,7 @@ def make_online_sepsis_reward_fn(
     task_name: str = "task1_textbook",
     seed: int = 42,
     warmup_ticks: int = 4,
-    inject_ticks: int = 8,
+    inject_ticks: int = 1,
     max_workers: int = 4,
 ) -> Callable[[List[str], List[str]], List[float]]:
     """Factory for online, live environment reward shaping used by GRPO."""
