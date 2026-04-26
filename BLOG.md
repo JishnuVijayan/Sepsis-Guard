@@ -6,11 +6,11 @@
 
 ## The number that should haunt you
 
-**11 million people die from sepsis every year.**
+**11 million people die from sepsis every year.** ([WHO, 2020](https://www.who.int/news-room/fact-sheets/detail/sepsis))
 
-More than all cancers combined. More than heart disease in most countries. More than any single natural disaster in living memory. And most people have never heard of it.
+That is approximately **20% of all deaths on earth** — one in five. Nearly 49 million cases every year. Almost half of those are children under five. More deaths than all cancers combined. More than heart disease in most countries. More than any single natural disaster in living memory. And most people have never heard of it.
 
-I did not build this project because I am a doctor. I built it because once you understand what sepsis is and why people keep dying from it, it becomes very hard to look away.
+We did not build this project because we are doctors. We built it because once you understand what sepsis is and why people keep dying from it, it becomes very hard to look away.
 
 ---
 
