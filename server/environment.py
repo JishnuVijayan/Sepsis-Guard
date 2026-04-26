@@ -148,6 +148,9 @@ class SepsisEnvironment(Environment):
         # by flags generated on the current tick.
         prev_flag_counts = dict(self._flag_counts)
 
+        # Snapshot BEFORE updating so reward functions see prior-tick counts (not this tick's).
+        prev_flag_counts = dict(self._flag_counts)
+
         for f in new_flags:
             key = (f.patient_id, f.source_role)
             self._flag_counts[key] = self._flag_counts.get(key, 0) + 1
