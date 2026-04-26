@@ -136,7 +136,7 @@ This project is an MVP. The environment needs real-world calibration, the physic
 - **HuggingFace Space (Live Environment):** [SepsisGuard on HF Spaces](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard)
 - **GitHub Repository:** [Sepsis-Guard on GitHub](https://github.com/JishnuVijayan/Sepsis-Guard)
 - **Training Notebook (Colab):** [colab_training_sepsisguard.ipynb](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard/blob/main/training/colab_training_sepsisguard.ipynb)
-- **Blog Post:** *(coming soon)*
+- **Blog Post:** [BLOG.md](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard/blob/main/BLOG.md)
 
 ---
 
@@ -149,7 +149,7 @@ uvicorn server.app:app --port 7860
 docker build -t sepsisguard . && docker run -p 7860:7860 sepsisguard
 ```
 
-**Environment variables:** Copy `.env.example` to `.env`. Set `HF_TOKEN` and optionally `MODEL_NAME` (default: `meta-llama/Llama-3.1-8B-Instruct`).
+**Environment variables:** Copy `.env.example` to `.env`. Set `HF_TOKEN` and optionally `MODEL_NAME` (default: `meta-llama/Llama-3.1-8B-Instruct`). The default `ENV_BASE_URL` points to the live HF Space: `https://jishnu-vijayan-03-sepsis-guard.hf.space`.
 
 **API endpoints:**
 

@@ -4,7 +4,8 @@ SepsisGuard -- LLM Inference Script
 Required env vars:
   API_BASE_URL   e.g. https://router.huggingface.co/v1
   MODEL_NAME     e.g. meta-llama/Llama-3.1-8B-Instruct
-    OPENAI_API_KEY  Preferred API token
+    API_KEY        Preferred API token
+    OPENAI_API_KEY  fallback OpenAI API token
     HF_TOKEN       Fallback HuggingFace API token
   ENV_BASE_URL   URL of the SepsisGuard Space (default: http://localhost:7860)
 
@@ -20,7 +21,7 @@ import requests
 from openai import OpenAI
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_KEY = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://localhost:7860").rstrip("/")
 TASK = os.getenv("SEPSIS_TASK")
