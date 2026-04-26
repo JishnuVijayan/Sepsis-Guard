@@ -21,7 +21,7 @@ tags:
 
 ## The Problem
 
-**11 million people die from sepsis every year.** That is more than all cancer deaths combined. Yet most people have never heard of it.
+**11 million people die from sepsis every year** — roughly 20% of all global deaths. ([WHO](https://www.who.int/news-room/fact-sheets/detail/sepsis)) That is more than all cancer deaths combined, with nearly 49 million cases annually. Yet most people have never heard of it.
 
 Sepsis is what happens when your own immune system — the system meant to protect you — turns against you. A small infection: a UTI, a cut, a chest infection. The immune response escalates out of control, organs begin to fail, blood pressure drops. The window to reverse it is measured in hours, not days.
 
