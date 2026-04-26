@@ -143,12 +143,28 @@ The direction is worth pursuing.
 
 ## Next steps
 
-To move from MVP to something that could plausibly help real patients, the next steps would be:
+### Technical roadmap
+
+To move from MVP to something that could plausibly help real patients:
 
 1. **Train the physician role seriously** — more task variety, longer training, larger base model
 2. **Calibrate physiology against real data** — the patient simulation needs validation against actual sepsis progression curves
 3. **Expand to Task 2 and Task 3** — the harder tasks test generalization in ways Task 1 does not
 4. **Evaluation by clinical experts** — before any deployment conversation, the reward function and agent behavior need review by people who treat sepsis
+
+### The business case
+
+The numbers make this worth pursuing beyond a hackathon.
+
+**The cost of sepsis is staggering.** In wealthy nations, treating a single sepsis patient costs over $32,000 on average (WHO). Across 49 million cases globally per year, the economic burden runs into the trillions. A system that catches sepsis hours earlier — reducing ICU stays, ventilator days, and organ failure complications — does not need to be dramatically better to generate enormous value.
+
+**The market already exists.** Hospitals spend heavily on early warning systems, clinical decision support, and patient monitoring platforms. The existing products (NEWS scores, sepsis alert tools) are rule-based and generate excessive false alarms. A trained multi-agent system that understands context — that a patient on immunosuppressants will not show the usual fever response, that the lab result and the vital trend together mean something the individual values do not — is a meaningfully better product.
+
+**The regulatory path is clearer than people assume.** A system positioned as a coordination and alerting tool — one that surfaces information for a clinician to act on rather than acting autonomously — fits within existing FDA and CE frameworks for clinical decision support software. It does not require the same level of validation as a diagnostic device. This is the right wedge into a heavily regulated market.
+
+**The deployment model is low-friction.** Modern hospitals already have digitized vitals, labs, pharmacy systems, and EHR integration APIs. The environment we built mirrors exactly the data feeds that already exist. Deployment does not require new hardware — it requires connecting to systems that are already running.
+
+The realistic path: validate with a hospital partner on retrospective data, demonstrate earlier detection in controlled trials, deploy as a monitoring overlay with human confirmation required at every step. The goal is not to replace clinical judgment. It is to make sure clinical judgment gets applied before it is too late.
 
 The scale of the problem makes it worth trying to get this right. 11 million deaths per year. A treatment that works when caught in time. A coordination problem that AI is, in principle, capable of helping solve.
 
@@ -158,4 +174,4 @@ The scale of the problem makes it worth trying to get this right. 11 million dea
 
 *Environment: [HuggingFace Space](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard)*
 *Code: [GitHub](https://github.com/JishnuVijayan/Sepsis-Guard)*
-*Training notebook: [`training/colab_training_new.ipynb`](training/colab_training_new.ipynb)*
+*Training notebook: [colab_training_sepsisguard.ipynb](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard/blob/main/training/colab_training_sepsisguard.ipynb)*

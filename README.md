@@ -135,7 +135,7 @@ This project is an MVP. The environment needs real-world calibration, the physic
 
 - **HuggingFace Space (Live Environment):** [SepsisGuard on HF Spaces](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard)
 - **GitHub Repository:** [Sepsis-Guard on GitHub](https://github.com/JishnuVijayan/Sepsis-Guard)
-- **Training Notebook (Colab):** [`training/colab_training_new.ipynb`](training/colab_training_new.ipynb)
+- **Training Notebook (Colab):** [colab_training_sepsisguard.ipynb](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard/blob/main/training/colab_training_sepsisguard.ipynb)
 - **Blog Post:** *(coming soon)*
 
 ---
