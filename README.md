@@ -17,6 +17,8 @@ tags:
 
 > *This project is a research prototype for early warning coordination only. It is not intended as medical advice and should not be used for clinical decision-making.*
 
+**[🌐 Live Environment](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard)** | **[💻 GitHub](https://github.com/JishnuVijayan/Sepsis-Guard)** | **[📓 Training Notebook](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard/blob/main/training/colab_training_sepsisguard.ipynb)** | **[📝 Blog](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard/blob/main/BLOG.md)** | **[🤖 Trained Model](https://huggingface.co/buckets/PhoeniX9651/sepsis-storage/tree/sepsis-model/sepsis-grpo-v3-lora)**
+
 ---
 
 ## The Problem
