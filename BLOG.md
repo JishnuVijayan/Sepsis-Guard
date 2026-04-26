@@ -174,4 +174,5 @@ The scale of the problem makes it worth trying to get this right. 11 million dea
 
 *Environment: [HuggingFace Space](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard)*
 *Code: [GitHub](https://github.com/JishnuVijayan/Sepsis-Guard)*
+*Trained model: [sepsis-grpo-v3-lora](https://huggingface.co/buckets/PhoeniX9651/sepsis-storage/tree/sepsis-model/sepsis-grpo-v3-lora)*
 *Training notebook: [colab_training_sepsisguard.ipynb](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard/blob/main/training/colab_training_sepsisguard.ipynb)*

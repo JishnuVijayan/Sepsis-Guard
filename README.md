@@ -135,6 +135,7 @@ This project is an MVP. The environment needs real-world calibration, the physic
 
 - **HuggingFace Space (Live Environment):** [SepsisGuard on HF Spaces](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard)
 - **GitHub Repository:** [Sepsis-Guard on GitHub](https://github.com/JishnuVijayan/Sepsis-Guard)
+- **Trained Model (GRPO LoRA v3):** [sepsis-grpo-v3-lora on HuggingFace](https://huggingface.co/buckets/PhoeniX9651/sepsis-storage/tree/sepsis-model/sepsis-grpo-v3-lora)
 - **Training Notebook (Colab):** [colab_training_sepsisguard.ipynb](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard/blob/main/training/colab_training_sepsisguard.ipynb)
 - **Blog Post:** [BLOG.md](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard/blob/main/BLOG.md)
 
