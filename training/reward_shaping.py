@@ -88,6 +88,11 @@ def _parse_action(text: str, role: str) -> Dict[str, Any]:
     return {"operation": _default_op(role)}
 
 
+def parse_action_text(text: str, role: str) -> Dict[str, Any]:
+    """Public helper for role-safe action parsing in training/eval notebooks."""
+    return _parse_action(text, role)
+
+
 def _extract_observation_from_prompt(prompt: str) -> Dict[str, Any]:
     marker = "Observation:\n"
     end_marker = "\nAction (JSON):"
