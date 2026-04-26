@@ -119,6 +119,37 @@ The current results are a proof of concept: **it is possible to train LLM agents
 
 ---
 
+### Follow-up Experiment: SFT + GRPO on Task 1 + Task 2
+
+**Baseline issue:** Physician underperformed in the first run, degrading despite other roles improving.
+
+**Intervention:** We ran a follow-up experiment using SFT followed by GRPO training across a broader curriculum (Task 1 + Task 2) with revised reward shaping designed to better reflect the physician's decision complexity.
+
+**Outcome:** Physician scores improved relative to the first run. In the Task 2 evaluation the physician reached 0.3883 (up from 0.4500→degraded in run 1), with the revised reward shaping providing a clearer learning signal for multi-source escalation decisions.
+
+![GRPO Task 2 Reward Curves and Role Scores](task2_training_results.jpeg)
+
+*Left: GRPO Task 2 reward curves (~200 steps). Center: Task 1 generalization scores (pre vs. post Task 2 GRPO). Right: Task 2 per-role scores — physician improved to 0.39 vs. heuristic baseline of 0.378.*
+
+![Post-Training Evaluation Table — Task 1 + Task 2](task2_eval_table.jpeg)
+
+*Full post-training evaluation across both tasks. Physician delta: +0.1975 on Task 1, +0.0500 on Task 2.*
+
+| Task | Role | Heuristic | Pre-Train | Post-Train | Delta |
+|---|---|---|---|---|---|
+| task1_textbook | Nurse | 0.7175 | 0.6600 | 0.6600 | +0.000 |
+| task1_textbook | Lab | 0.7175 | 0.6600 | 0.6600 | +0.000 |
+| task1_textbook | Pharmacist | 0.7175 | 0.6600 | 0.6600 | +0.000 |
+| task1_textbook | Physician | 0.7175 | 0.4575 | 0.6550 | **+0.198** |
+| task2_atypical | Nurse | 0.3783 | 0.4342 | 0.4342 | +0.000 |
+| task2_atypical | Lab | 0.3783 | 0.3725 | 0.3725 | +0.000 |
+| task2_atypical | Pharmacist | 0.3783 | 0.4342 | 0.4342 | +0.000 |
+| task2_atypical | Physician | 0.3783 | 0.3383 | 0.3883 | **+0.050** |
+
+**Caveat:** In a follow-up SFT+GRPO experiment with a broader curriculum (Task 1+2) and revised reward shaping, physician scores improved relative to our first run, providing preliminary support for our hypothesis that physician performance is bottlenecked by curriculum depth and reward design. However, gains are not yet uniform across roles and require larger-scale evaluation to confirm.
+
+---
+
 ## Why It Matters
 
 Sepsis is not a rare edge case. It is the most common cause of death in hospitals worldwide. It kills more people each year than heart attacks, strokes, and all cancers combined. And unlike many of those conditions, it is largely preventable with timely action.

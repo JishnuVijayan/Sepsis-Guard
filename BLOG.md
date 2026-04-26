@@ -121,6 +121,39 @@ The Physician role degraded. This is expected. The physician's task is structura
 
 ---
 
+## Follow-up experiment: SFT + GRPO on Task 1 + Task 2
+
+The physician regression was not a dead end — it was a hypothesis.
+
+If the physician underperforms because Task 1 alone is too narrow a curriculum, what happens when we expand the training to include Task 2 (atypical cases, 10 patients, 48 hours) and pair GRPO with an initial SFT pass to stabilize the starting point? And what happens if we revise the reward shaping to give the physician role a clearer signal for multi-source escalation decisions?
+
+We ran that experiment.
+
+**Intervention:** SFT followed by GRPO training across Task 1 + Task 2, with revised reward shaping targeting the physician's specific decision structure.
+
+**Outcome:** Physician scores improved in both tasks.
+
+![GRPO Task 2 Reward Curves and Per-Role Scores](task2_training_results.jpeg)
+
+*Left: GRPO Task 2 reward curves (~200 steps). Center: Task 1 generalization — scores held stable after Task 2 training. Right: Task 2 per-role scores — physician reached 0.39 against a heuristic baseline of 0.378.*
+
+![Post-Training Evaluation Table — Task 1 + Task 2](task2_eval_table.jpeg)
+
+*Full evaluation across both tasks. Physician gained +0.198 on Task 1 and +0.050 on Task 2.*
+
+| Task | Role | Heuristic | Pre-Train | Post-Train | Delta |
+|---|---|---|---|---|---|
+| task1_textbook | Physician | 0.7175 | 0.4575 | 0.6550 | **+0.198** |
+| task2_atypical | Physician | 0.3783 | 0.3383 | 0.3883 | **+0.050** |
+
+The other roles held their scores — they did not improve further, but they did not regress either, which matters: the revised reward shaping improved the physician's signal without degrading the other agents.
+
+**What this means:** In a follow-up SFT+GRPO experiment with a broader curriculum (Task 1+2) and revised reward shaping, physician scores improved relative to our first run, providing preliminary support for our hypothesis that physician performance is bottlenecked by curriculum depth and reward design. However, gains are not yet uniform across roles and require larger-scale evaluation — more seeds, ablations on the reward shaping components, and testing on Task 3 — before we can call this a solved problem.
+
+The pattern is encouraging. Each training iteration has produced a clearer signal about where the limits are. That is how this kind of work is supposed to go.
+
+---
+
 ## What we learned
 
 Building this environment clarified something that is easy to miss when thinking about AI in healthcare: **the bottleneck is often not the individual decision, it is the information flow that precedes it.**
