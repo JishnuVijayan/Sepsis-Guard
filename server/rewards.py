@@ -49,9 +49,15 @@ def compute_nurse_reward(
         f.patient_id for f in flags_this_tick
         if f.source_role == "nurse" and f.flag_type in ("escalation", "concern")
     }
+    # Patients already escalated in a prior tick — don't penalise re-silence.
+    prior_escalated = {
+        pid for (pid, role), count in prior_flag_counts.items()
+        if role == "nurse" and count > 0
+    }
     for p in patients:
         if (_patient_has_active_sepsis(p) and p.antibiotics_administered is None
-                and p.patient_id not in nurse_patients_flagged):
+                and p.patient_id not in nurse_patients_flagged
+                and p.patient_id not in prior_escalated):
             if p.infection_severity > 0.8:
                 r -= 2.0
             elif p.infection_severity > 0.5:
@@ -177,7 +183,7 @@ def compute_physician_reward(
         p = next((p for p in patients if p.patient_id == action.patient_id), None)
         if p is None: return 0.0
         if phys_meta.get("on_false_alarm") or not p.infection_present:
-            r -= 1.5
+            r -= 0.5
         elif phys_meta.get("on_valid_escalation"):
             onset = p.sepsis_onset_tick
             if onset is not None:
@@ -223,7 +229,7 @@ def compute_physician_reward(
                 if f.patient_id == action.patient_id
             }
             if len(escalation_sources) == 0:
-                r -= 2.0
+                r -= 0.5
     return r
 
 
