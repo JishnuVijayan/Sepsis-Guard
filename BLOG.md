@@ -203,7 +203,7 @@ The scale of the problem makes it worth trying to get this right. 11 million dea
 
 ---
 
-*SepsisGuard was built at the OpenEnv Hackathon, Meta x Hugging Face, Bangalore, April 2026.*
+*SepsisGuard was built by Team DominatorZ at the OpenEnv Hackathon, Meta x Hugging Face, Bangalore, April 2026.*
 
 *Environment: [HuggingFace Space](https://huggingface.co/spaces/Jishnu-Vijayan-03/Sepsis-Guard)*
 *Code: [GitHub](https://github.com/JishnuVijayan/Sepsis-Guard)*

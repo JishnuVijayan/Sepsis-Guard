@@ -13,7 +13,7 @@ tags:
 
 # SepsisGuard — Teaching AI to Save Lives from Sepsis
 
-**Multi-Agent Clinical Coordination Environment | OpenEnv Hackathon 2026**
+**Multi-Agent Clinical Coordination Environment | Team DominatorZ | OpenEnv Hackathon 2026**
 
 > *This project is a research prototype for early warning coordination only. It is not intended as medical advice and should not be used for clinical decision-making.*
 
@@ -223,6 +223,6 @@ sepsisguard/
 
 ---
 
-**OpenEnv Hackathon — Meta x Hugging Face, Bangalore, April 2026**
+**Team DominatorZ — OpenEnv Hackathon, Meta x Hugging Face, Bangalore, April 2026**
 Primary Theme: Multi-Agent Interactions
 Secondary Theme: World Modeling (Professional Tasks)

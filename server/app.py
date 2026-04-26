@@ -385,6 +385,119 @@ def root():
     .link-btn.teal     { background: var(--teal); color: var(--white); }
     .link-btn.red      { background: var(--red); color: var(--white); }
 
+    /* ── QUICKSTART ── */
+    .qs-box {
+      background: var(--white);
+      border-radius: 14px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08);
+      padding: 1.6rem 1.8rem;
+      border: 1px solid #dce8f0;
+      overflow: hidden;
+    }
+    .qs-step {
+      display: flex;
+      gap: 1.2rem;
+      align-items: flex-start;
+      min-width: 0;
+    }
+    .qs-step > div:last-child {
+      min-width: 0;
+      flex: 1;
+    }
+    .qs-num {
+      flex-shrink: 0;
+      width: 2rem; height: 2rem;
+      background: var(--navy);
+      color: var(--white);
+      border-radius: 50%;
+      font-size: .85rem;
+      font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+      margin-top: .15rem;
+    }
+    .qs-label {
+      font-weight: 700;
+      font-size: 1rem;
+      margin-bottom: .2rem;
+      color: var(--navy);
+    }
+    .qs-desc {
+      font-size: .85rem;
+      color: var(--muted);
+      margin-bottom: .65rem;
+    }
+    .qs-code {
+      background: #0d1b2a;
+      color: #c9e0f5;
+      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+      font-size: .78rem;
+      line-height: 1.65;
+      padding: .9rem 1.1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      white-space: pre;
+      margin-bottom: .55rem;
+      max-width: 100%;
+      word-break: normal;
+      overflow-wrap: normal;
+    }
+    .qs-code .kw  { color: #79c0ff; font-weight: 700; }
+    .qs-code .cm  { color: #6e8ca0; }
+    .qs-code .key { color: #a5d6ff; }
+    .qs-code .str { color: #a8d8a8; }
+    .qs-code .num { color: #f2cc60; }
+    .qs-code code { background: none; color: inherit; font-size: inherit; }
+    .qs-copy-row {
+      display: flex;
+      gap: .6rem;
+      align-items: center;
+      margin-bottom: .3rem;
+    }
+    .qs-copy {
+      background: #e8f0f8;
+      border: none;
+      border-radius: 6px;
+      padding: .28rem .75rem;
+      font-size: .78rem;
+      font-weight: 600;
+      color: var(--navy);
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .qs-copy:hover { background: #d0e4f4; }
+    .qs-copy.copied { background: #d4f4e4; color: #1a6e3f; }
+    .qs-try {
+      font-size: .78rem;
+      color: var(--teal);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .qs-try:hover { text-decoration: underline; }
+    .qs-divider {
+      height: 1px;
+      background: #e8eef4;
+      margin: 1.2rem 0;
+    }
+    .qs-tip {
+      display: flex;
+      gap: .7rem;
+      align-items: flex-start;
+      background: #f0f8ff;
+      border-left: 3px solid var(--teal);
+      border-radius: 6px;
+      padding: .75rem 1rem;
+      font-size: .84rem;
+      color: #2a4a5e;
+      margin-top: 1.2rem;
+    }
+    .qs-tip-icon { font-size: 1.1rem; flex-shrink: 0; }
+    .qs-tip code {
+      background: #d8edf8;
+      border-radius: 3px;
+      padding: .05rem .35rem;
+      font-size: .78rem;
+    }
+
     /* ── FOOTER ── */
     footer {
       background: var(--navy);
@@ -531,12 +644,130 @@ def root():
   </div>
 </div>
 
+<!-- QUICKSTART -->
+<div class="section" style="padding-top:0">
+  <div class="section-title">Quick Start</div>
+  <div class="qs-box">
+
+    <div class="qs-step">
+      <div class="qs-num">1</div>
+      <div>
+        <div class="qs-label">Start a new episode</div>
+        <div class="qs-desc">Reset the environment with a task and seed. Returns initial observations for all 4 agents.</div>
+        <pre class="qs-code"><span class="kw">POST</span> https://jishnu-vijayan-03-sepsis-guard.hf.space/reset
+<span class="cm">Content-Type: application/json</span>
+
+{
+  <span class="key">"task_name"</span>: <span class="str">"task1_textbook"</span>,
+  <span class="key">"seed"</span>: <span class="num">42</span>
+}</pre>
+        <div class="qs-copy-row">
+          <button class="qs-copy" onclick="copyCode(this, 'POST https://jishnu-vijayan-03-sepsis-guard.hf.space/reset\nContent-Type: application/json\n\n{\"task_name\": \"task1_textbook\", \"seed\": 42}')">Copy</button>
+          <a class="qs-try" href="/docs#/default/reset_reset_post" target="_blank">Try in Swagger ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="qs-divider"></div>
+
+    <div class="qs-step">
+      <div class="qs-num">2</div>
+      <div>
+        <div class="qs-label">Submit agent actions</div>
+        <div class="qs-desc">Send one action per agent each tick. The environment resolves them, advances patient physiology, and returns updated observations + rewards.</div>
+        <pre class="qs-code"><span class="kw">POST</span> https://jishnu-vijayan-03-sepsis-guard.hf.space/step
+<span class="cm">Content-Type: application/json</span>
+
+{
+  <span class="key">"actions"</span>: {
+    <span class="key">"nurse"</span>: {
+      <span class="key">"operation"</span>: <span class="str">"escalate_to_physician"</span>,
+      <span class="key">"patient_id"</span>: <span class="str">"P1"</span>,
+      <span class="key">"urgency"</span>: <span class="str">"urgent"</span>,
+      <span class="key">"rationale"</span>: <span class="str">"HR 118, BP 88"</span>
+    },
+    <span class="key">"lab"</span>: {
+      <span class="key">"operation"</span>: <span class="str">"flag_critical"</span>,
+      <span class="key">"patient_id"</span>: <span class="str">"P1"</span>,
+      <span class="key">"test"</span>: <span class="str">"lactate"</span>,
+      <span class="key">"reason"</span>: <span class="str">"lactate 3.8"</span>
+    },
+    <span class="key">"pharmacist"</span>: {
+      <span class="key">"operation"</span>: <span class="str">"recommend_antibiotic"</span>,
+      <span class="key">"patient_id"</span>: <span class="str">"P1"</span>,
+      <span class="key">"drug"</span>: <span class="str">"piperacillin_tazobactam"</span>,
+      <span class="key">"rationale"</span>: <span class="str">"sepsis suspected"</span>
+    },
+    <span class="key">"physician"</span>: {
+      <span class="key">"operation"</span>: <span class="str">"order_antibiotics"</span>,
+      <span class="key">"patient_id"</span>: <span class="str">"P1"</span>,
+      <span class="key">"drug"</span>: <span class="str">"piperacillin_tazobactam"</span>
+    }
+  }
+}</pre>
+        <div class="qs-copy-row">
+          <button class="qs-copy" onclick="copyCode(this, 'POST https://jishnu-vijayan-03-sepsis-guard.hf.space/step')">Copy URL</button>
+          <a class="qs-try" href="/docs#/default/step_step_post" target="_blank">Try in Swagger ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="qs-divider"></div>
+
+    <div class="qs-step">
+      <div class="qs-num">3</div>
+      <div>
+        <div class="qs-label">Get the episode score</div>
+        <div class="qs-desc">After the episode ends (<code>done: true</code>), fetch the grader for team score and per-role metrics.</div>
+        <pre class="qs-code"><span class="kw">GET</span>  https://jishnu-vijayan-03-sepsis-guard.hf.space/grader</pre>
+        <div class="qs-copy-row">
+          <button class="qs-copy" onclick="copyCode(this, 'GET https://jishnu-vijayan-03-sepsis-guard.hf.space/grader')">Copy</button>
+          <a class="qs-try" href="/grader" target="_blank">Open ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="qs-divider"></div>
+
+    <div class="qs-step">
+      <div class="qs-num">4</div>
+      <div>
+        <div class="qs-label">Run heuristic baseline</div>
+        <div class="qs-desc">Runs rule-based agents across all three tasks. Use this score as the bar your trained model needs to beat.</div>
+        <pre class="qs-code"><span class="kw">GET</span>  https://jishnu-vijayan-03-sepsis-guard.hf.space/baseline</pre>
+        <div class="qs-copy-row">
+          <button class="qs-copy" onclick="copyCode(this, 'GET https://jishnu-vijayan-03-sepsis-guard.hf.space/baseline')">Copy</button>
+          <a class="qs-try" href="/baseline" target="_blank">Run now ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="qs-tip">
+      <span class="qs-tip-icon">&#128161;</span>
+      <span>Each tick = 30 simulated minutes. Repeat <strong>Step 2</strong> until <code>done: true</code>. For multi-session parallel training, create an isolated session first via <code>POST /session</code> and pass the returned <code>session_id</code> as the <code>X-Session-Id</code> header.</span>
+    </div>
+
+  </div>
+</div>
+
 <!-- FOOTER -->
 <footer>
   <p>SepsisGuard &mdash; <a href="https://www.who.int/news-room/fact-sheets/detail/sepsis" target="_blank">11M deaths/year from sepsis (WHO)</a> &mdash; Built at Meta &times; HuggingFace OpenEnv Hackathon, Bangalore, April 2026</p>
   <p style="margin-top:.4rem">Not medical advice. Research prototype only.</p>
 </footer>
 
+<script>
+function copyCode(btn, text) {
+  navigator.clipboard.writeText(text).then(function() {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(function() {
+      btn.textContent = 'Copy';
+      btn.classList.remove('copied');
+    }, 1800);
+  });
+}
+</script>
 </body>
 </html>"""
 
