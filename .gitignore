@@ -16,3 +16,4 @@ wandb/
 outputs/
 HACKATHON_NOTES.md
 saved_rollouts/
+.claude/
